@@ -1,0 +1,104 @@
+{
+  "account": "egdev6",
+  "repository": "egdev6/particle-studio",
+  "requiredScopes": ["repo", "project"],
+  "labels": {
+    "area:agents": {
+      "color": "7057FF",
+      "description": "Agent workflows and integrations",
+      "managed": true
+    },
+    "area:editor": {
+      "color": "0E8A16",
+      "description": "Scene and asset editing",
+      "managed": true
+    },
+    "area:export": {
+      "color": "1D76DB",
+      "description": "Output and export pipelines",
+      "managed": true
+    },
+    "area:infrastructure": {
+      "color": "5319E7",
+      "description": "Tooling, CI, and platform services",
+      "managed": true
+    },
+    "area:renderer": {
+      "color": "006B75",
+      "description": "Rendering engine and visuals",
+      "managed": true
+    },
+    "area:timeline": {
+      "color": "D4C5F9",
+      "description": "Animation and timeline workflows",
+      "managed": true
+    },
+    "status:approved": {
+      "color": "0E8A16",
+      "description": "Approved for implementation",
+      "managed": true
+    },
+    "status:blocked": {
+      "color": "B60205",
+      "description": "Blocked pending resolution",
+      "managed": true
+    },
+    "status:needs-review": {
+      "color": "FBCA04",
+      "description": "Awaiting maintainer review",
+      "managed": true
+    },
+    "type:bug": {
+      "color": "D73A4A",
+      "description": "Defect or regression",
+      "managed": true
+    },
+    "type:feature": {
+      "color": "1D76DB",
+      "description": "New capability or enhancement",
+      "managed": true
+    }
+  },
+  "milestones": {},
+  "templates": {
+    "issueForms": ["bug_report", "feature_request"],
+    "issueFormLabels": {
+      "bug_report": ["status:needs-review", "type:bug"],
+      "feature_request": ["status:needs-review", "type:feature"]
+    },
+    "pullRequest": true,
+    "mode": "ensure"
+  },
+  "project": {
+    "title": "Particle Studio Roadmap",
+    "fields": {
+      "Area": {
+        "dataType": "SINGLE_SELECT",
+        "options": ["Agents", "Editor", "Export", "Infrastructure", "Renderer", "Timeline"]
+      },
+      "Effort": {
+        "dataType": "SINGLE_SELECT",
+        "options": ["XS", "S", "M", "L", "XL"]
+      },
+      "Priority": {
+        "dataType": "SINGLE_SELECT",
+        "options": ["P0", "P1", "P2", "P3"]
+      },
+      "Risk": {
+        "dataType": "SINGLE_SELECT",
+        "options": ["Low", "Medium", "High"]
+      },
+      "Target date": {
+        "dataType": "DATE"
+      }
+    },
+    "views": {
+      "Backlog": {
+        "layout": "TABLE"
+      },
+      "Board": {
+        "layout": "BOARD"
+      }
+    }
+  }
+}
