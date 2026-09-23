@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "../../node_modules/.cache/particle-studio/scene-document",
+    "tsBuildInfoFile": "../../node_modules/.cache/particle-studio/scene-document/tsconfig.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"]
+}
