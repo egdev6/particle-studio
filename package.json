@@ -1,0 +1,58 @@
+{
+  "name": "particle-studio",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@12.0.2",
+  "engines": {
+    "node": "24.20.x",
+    "npm": "12.0.2"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "validator:hash": "node --experimental-strip-types packages/scene-document/scripts/generate-scene-document-v1-validator.ts hash",
+    "validator:generate": "node --experimental-strip-types packages/scene-document/scripts/generate-scene-document-v1-validator.ts generate",
+    "validator:verify": "node --experimental-strip-types packages/scene-document/scripts/generate-scene-document-v1-validator.ts verify",
+    "validator:prepare": "npm run validator:generate && npm run validator:verify",
+    "validator:clean": "node --experimental-strip-types packages/scene-document/scripts/generate-scene-document-v1-validator.ts clean",
+    "predev": "npm run validator:prepare",
+    "dev": "vite",
+    "prebuild": "npm run validator:prepare",
+    "build": "vite build",
+    "prepreview": "npm run validator:prepare",
+    "preview": "vite preview",
+    "pretest:unit": "npm run validator:prepare",
+    "test:unit": "vitest run --project core && npm run validator:prepare && vitest run --project ui",
+    "pretest:integration": "npm run validator:prepare",
+    "test:integration": "vitest run --project integration",
+    "pretest:browser": "npm run validator:prepare",
+    "test:browser": "playwright test --project chromium",
+    "pretest:performance": "npm run validator:prepare",
+    "test:performance": "playwright test --project chromium-performance",
+    "pretest:product": "npm run validator:prepare",
+    "test:product": "npm run test:unit && npm run test:integration && npm run test:browser",
+    "pretest": "npm run validator:prepare",
+    "test": "npm run test:product",
+    "pretypecheck": "npm run validator:prepare",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@testing-library/react": "16.3.3",
+    "@types/node": "^24.10.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "@vitejs/plugin-react": "6.1.1",
+    "fake-indexeddb": "6.2.5",
+    "jsdom": "30.0.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "rolldown": "1.2.7",
+    "typescript": "5.9.3",
+    "vite": "8.2.2",
+    "vitest": "5.0.0"
+  }
+}

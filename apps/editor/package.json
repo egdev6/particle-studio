@@ -1,0 +1,16 @@
+{
+  "name": "@particle-studio/editor",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@particle-studio/commands": "0.0.0",
+    "@particle-studio/export": "0.0.0",
+    "@particle-studio/renderer-canvas2d": "0.0.0",
+    "@particle-studio/runtime": "0.0.0",
+    "@particle-studio/scene-document": "0.0.0",
+    "@particle-studio/webmcp-adapter": "0.0.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@particle-studio/export",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@particle-studio/persistence": "0.0.0",
+    "es-module-lexer": "2.3.2",
+    "@particle-studio/runtime": "0.0.0",
+    "@particle-studio/renderer-canvas2d": "0.0.0",
+    "@particle-studio/scene-document": "0.0.0"
+  },
+  "devDependencies": {
+    "rolldown": "1.2.7"
+  }
+}

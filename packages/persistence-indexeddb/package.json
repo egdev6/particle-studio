@@ -1,0 +1,13 @@
+{
+  "name": "@particle-studio/persistence-indexeddb",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@particle-studio/persistence": "0.0.0",
+    "dexie": "4.4.6"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@particle-studio/persistence-fs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./revision-persistence": "./src/revision-persistence.ts",
+    "./asset-persistence": "./src/asset-persistence.ts"
+  },
+  "dependencies": {
+    "@particle-studio/persistence": "0.0.0"
+  },
+  "devDependencies": {
+    "@particle-studio/scene-document": "0.0.0"
+  }
+}
