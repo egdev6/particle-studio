@@ -1,3 +1,25 @@
 # Local Pi runtime state
 .atl/
 .pi/settings.json
+
+# Ephemeral verified Ajv standalone output
+packages/scene-document/src/generated/scene-document-v1-validator.generated.mjs
+
+# Local planning and verification records; keep product source visible to Git
+/odd/
+/openspec/
+
+# Generated dependencies, builds, and compiler state at any depth
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Root test and analysis output
+/.vitest/
+/.codegraph/
+/test-results/
+/playwright-report/
+
+# Pi-local runtime state; keep .pi/skills visible
+/.pi/gentle-ai/
+/.pi/git/

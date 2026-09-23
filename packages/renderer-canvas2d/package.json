@@ -1,0 +1,12 @@
+{
+  "name": "@particle-studio/renderer-canvas2d",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@particle-studio/runtime": "0.0.0"
+  }
+}
