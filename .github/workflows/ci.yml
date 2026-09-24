@@ -1,0 +1,40 @@
+name: Focused CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+jobs:
+  focused-ci:
+    name: Focused package checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.20.x
+          package-manager-cache: false
+      - name: Pin and verify npm
+        run: |
+          npm install --global npm@12.0.2 --ignore-scripts --no-audit --no-fund
+          test "$(npm --version)" = "12.0.2"
+      - name: Install workspace dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prepare generated validator
+        run: npm run validator:prepare
+      - name: Test SceneDocument and runtime
+        run: npx vitest run --project core packages/scene-document/tests packages/runtime/tests
+      - name: Smoke-test Canvas2D entrypoint
+        run: npx vitest run --project integration packages/renderer-canvas2d/tests/entrypoint.smoke.test.ts
+      - name: Typecheck focused packages
+        run: |
+          npx tsc -p packages/scene-document/tsconfig.json --noEmit --pretty false
+          npx tsc -p packages/runtime/tsconfig.json --noEmit --pretty false
+          npx tsc -p packages/renderer-canvas2d/tsconfig.json --noEmit --pretty false
