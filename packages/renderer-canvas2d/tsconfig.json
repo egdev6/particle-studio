@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "../../node_modules/.cache/particle-studio/renderer-canvas2d",
+    "tsBuildInfoFile": "../../node_modules/.cache/particle-studio/renderer-canvas2d/tsconfig.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"]
+}
