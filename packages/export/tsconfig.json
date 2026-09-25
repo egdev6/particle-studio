@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "../../node_modules/.cache/particle-studio/export",
+    "tsBuildInfoFile": "../../node_modules/.cache/particle-studio/export/tsconfig.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"]
+}

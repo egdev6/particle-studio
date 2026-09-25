@@ -30,7 +30,7 @@ jobs:
       - name: Prepare generated validator
         run: npm run validator:prepare
       - name: Test SceneDocument, runtime, commands, and persistence adapters
-        run: npx vitest run --project core packages/scene-document/tests packages/runtime/tests packages/commands/tests packages/persistence/tests packages/persistence-indexeddb/tests packages/persistence-fs/tests
+        run: npx vitest run --project core packages/scene-document/tests packages/runtime/tests packages/commands/tests packages/persistence/tests packages/persistence-indexeddb/tests packages/persistence-fs/tests packages/export/tests
       - name: Smoke-test Canvas2D entrypoint
         run: npx vitest run --project integration packages/renderer-canvas2d/tests/entrypoint.smoke.test.ts
       - name: Typecheck focused packages
@@ -42,3 +42,4 @@ jobs:
           npx tsc -p packages/persistence/tsconfig.json --pretty false
           npx tsc -p packages/persistence-indexeddb/tsconfig.json --noEmit --pretty false
           npx tsc -p packages/persistence-fs/tsconfig.json --noEmit --pretty false
+          npx tsc -p packages/export/tsconfig.json --noEmit --pretty false
