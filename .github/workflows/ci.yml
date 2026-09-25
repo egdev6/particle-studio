@@ -47,3 +47,11 @@ jobs:
           npx tsc -p packages/export/tsconfig.json --noEmit --pretty false
           npx tsc -p packages/webmcp-adapter/tsconfig.json --noEmit --pretty false
           npx tsc -p apps/headless-mcp/tsconfig.json --noEmit --pretty false
+      - name: Build headless MCP smoke image
+        timeout-minutes: 20
+        run: docker build --progress=plain -f apps/headless-mcp/Dockerfile -t particle-studio-headless-mcp:d1-smoke .
+      - name: Smoke-test headless MCP container across four sessions
+        timeout-minutes: 15
+        env:
+          PARTICLE_STUDIO_SMOKE_EVIDENCE: ${{ runner.temp }}/particle-studio-container-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+        run: node scripts/container-smoke/smoke.mjs
