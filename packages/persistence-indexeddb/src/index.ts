@@ -688,7 +688,7 @@ export function createIndexedDbPersistenceAdapter(input: {
 
             const record = await database.pointers.get(complete.documentId);
             const saved =
-              record?.documentId === complete.documentId
+              record !== undefined && record.documentId === complete.documentId
                 ? (pointerSnapshot(record)?.saved ?? null)
                 : null;
             const retained = (

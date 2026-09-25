@@ -39,5 +39,5 @@ jobs:
           npx tsc -p packages/runtime/tsconfig.json --noEmit --pretty false
           npx tsc -p packages/renderer-canvas2d/tsconfig.json --noEmit --pretty false
           npx tsc -p packages/commands/tsconfig.json --noEmit --pretty false
-          npx tsc -p packages/persistence/tsconfig.json --noEmit --pretty false
+          npx tsc -p packages/persistence/tsconfig.json --pretty false
           npx tsc -p packages/persistence-indexeddb/tsconfig.json --noEmit --pretty false
