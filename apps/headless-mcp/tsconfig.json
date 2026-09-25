@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./node_modules/.cache/tsc/headless-mcp",
+    "tsBuildInfoFile": "./node_modules/.cache/tsc/headless-mcp.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts", "tests-integration/**/*.ts"]
+}
