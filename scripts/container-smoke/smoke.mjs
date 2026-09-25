@@ -426,14 +426,14 @@ async function main() {
     // image: no exposed ports, no volumes, no healthcheck, SIGTERM stop
     // signal, the non-root `node` user, and an exec-form entrypoint.
     const imageConfig = imageMeta.Config ?? {};
-    check("image config exposes no ports", imageConfig.ExposedPorts === undefined || Object.keys(imageConfig.ExposedPorts).length === 0, imageConfig.ExposedPorts ?? null);
-    check("image config declares no volumes", imageConfig.Volumes === undefined || Object.keys(imageConfig.Volumes).length === 0, imageConfig.Volumes ?? null);
-    check("image config defines no healthcheck", imageConfig.Healthcheck === undefined, imageConfig.Healthcheck ?? null);
+    check("image config exposes no ports", imageConfig.ExposedPorts == null || (isRecord(imageConfig.ExposedPorts) && Object.keys(imageConfig.ExposedPorts).length === 0), imageConfig.ExposedPorts ?? null);
+    check("image config declares no volumes", imageConfig.Volumes == null || (isRecord(imageConfig.Volumes) && Object.keys(imageConfig.Volumes).length === 0), imageConfig.Volumes ?? null);
+    check("image config defines no healthcheck", imageConfig.Healthcheck == null, imageConfig.Healthcheck ?? null);
     check("image config StopSignal is SIGTERM", imageConfig.StopSignal === "SIGTERM", imageConfig.StopSignal ?? null);
     check("image config user is the non-root node user", imageConfig.User === "node", imageConfig.User ?? null);
     check(
       "image config entrypoint is the accepted exec-form node entry",
-      Array.isArray(imageConfig.Entrypoint) && JSON.stringify(imageConfig.Entrypoint) === JSON.stringify(["node", "--import", "tsx", "apps/headless-mcp/src/main.ts"]) && (imageConfig.Cmd === undefined || imageConfig.Cmd.length === 0),
+      Array.isArray(imageConfig.Entrypoint) && JSON.stringify(imageConfig.Entrypoint) === JSON.stringify(["node", "--import", "tsx", "apps/headless-mcp/src/main.ts"]) && (imageConfig.Cmd == null || (Array.isArray(imageConfig.Cmd) && imageConfig.Cmd.length === 0)),
       { Entrypoint: imageConfig.Entrypoint ?? null, Cmd: imageConfig.Cmd ?? null },
     );
 
