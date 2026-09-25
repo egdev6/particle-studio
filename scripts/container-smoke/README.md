@@ -1,12 +1,13 @@
 # Container smoke harness
 
 In-tree, self-contained smoke harness for the hardened `particle-studio-headless-mcp`
-container image. It runs four sequential `docker run --rm -i` sessions against one
-evidence root and records every observation under that root:
+container image. It runs four sequential principal `docker run --rm -i` DUT sessions against one
+evidence root and records every observation under that root. Additional short-lived,
+read-only snapshot helper containers are not DUT sessions:
 
 - **run 1** (seeded): initialize, `tools/list`, live in-container inspection
   (uid/gid, network, mounts, write probes), summary, mutating dispatch,
-  `validate_draft`, clean stdin-EOF shutdown, host-side persistence checks.
+  `validate_draft`, clean stdin-EOF shutdown, same-UID snapshot persistence checks.
 - **run 2** (no seed): resume of the persisted revision, second mutating
   dispatch, clean `SIGTERM` shutdown, persistence checks.
 - **run 3** (no seed): container-level undo/redo coverage — tools surface,
@@ -68,6 +69,17 @@ invoking host user, able to bind-mount the private parent; unusual user-namespac
 or remote-daemon mappings may still require a compatible host setup. CI's
 evidence root is ephemeral and is not uploaded.
 
+Snapshotting uses `docker exec --user 1000:1000` for the live run 1 snapshot,
+then a separate `docker run --rm --network=none --read-only --user 1000:1000`
+with a Node entrypoint after each DUT exits. Only the three role roots are
+mounted, all read-only; the helper reads the private persistence directories
+as the same UID that created them. It writes no mounted data. Snapshot JSON
+is captured and validated by the host and saved inside private evidence; failed,
+malformed, timed-out, or oversized helper output fails the smoke with bounded
+diagnostics in `<label>-roots-snapshot.json.error`. This avoids host traversal
+of app-created `0700` persistence directories without weakening their modes.
+It does not prove access across different host and container UID mappings.
+
 Exit status is `0` only when every check passes; any failed check exits
 non-zero and writes a `smoke-failure.json` naming the check and its observed
 detail.
@@ -99,7 +111,8 @@ The harness creates and fills the evidence root with:
 - On failure, additionally: `runN-partial-stdout-lines.jsonl` and
   `runN-partial-stderr.log` for every started session, and `.error` variants
   (`runN-live-inspect.json.error`, `runN-image-devdirs.json.error`) whenever
-  the corresponding probe exits non-zero.
+  the corresponding probe exits non-zero; `<label>-roots-snapshot.json.error`
+  records bounded snapshot helper failure diagnostics.
 
 ## Hardening contract asserted
 

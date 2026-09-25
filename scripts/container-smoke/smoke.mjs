@@ -138,6 +138,7 @@ chmodSync(OUT, 0o777);
 
 const LIVE_SCRIPT = readFileSync(join(HARNESS_DIR, "live-inspect.cjs"), "utf8");
 const INSPECT_DIRS_SCRIPT = readFileSync(join(HARNESS_DIR, "inspect-dirs.mjs"), "utf8");
+const SNAPSHOT_SCRIPT = readFileSync(join(HARNESS_DIR, "snapshot-roots.mjs"), "utf8") + "\nconsole.log(JSON.stringify(snapshotRoots()));\n";
 
 const TOOL_NAMES = [
   "particle_studio.get_draft_summary",
@@ -181,33 +182,48 @@ const SEED_INFO = {
   bytes: seedBytes.length,
 };
 
-function walk(dir, base = dir, acc = []) {
-  for (const name of readdirSync(dir).sort()) {
-    const full = join(dir, name);
-    const st = statSync(full);
-    if (st.isDirectory()) walk(full, base, acc);
-    else if (st.isFile()) {
-      const bytes = readFileSync(full);
-      acc.push({
-        path: full.slice(base.length + 1),
-        size: st.size,
-        mode: (st.mode & 0o777).toString(8),
-        uid: st.uid,
-        gid: st.gid,
-        sha256: sha256(bytes),
-        ...(st.size < 4096 ? { content: bytes.toString("utf8") } : {}),
-      });
-    }
+const SNAPSHOT_BUFFER_LIMIT = 32 * 1024 * 1024;
+function snapshotRoots(label, runningName = null) {
+  const args = runningName === null
+    ? ["run", "--rm", "--network=none", "--read-only", "--user", "1000:1000",
+      "-v", DOC + ":/data/documents:ro", "-v", WS + ":/data/workspace:ro",
+      "-v", OUT + ":/data/outputs:ro", "--entrypoint", "node", IMAGE,
+      "--input-type=module", "-e", SNAPSHOT_SCRIPT]
+    : ["exec", "--user", "1000:1000", runningName, "node", "--input-type=module", "-e", SNAPSHOT_SCRIPT];
+  const result = spawnSync("docker", args, { encoding: "utf8", maxBuffer: SNAPSHOT_BUFFER_LIMIT, timeout: 60_000 });
+  const errorFile = join(EVID, label + "-roots-snapshot.json.error");
+  const diagnostic = { status: result.status, signal: result.signal, error: result.error?.message ?? null,
+    stderr: (result.stderr ?? "").slice(0, 2000), stdoutBytes: Buffer.byteLength(result.stdout ?? "", "utf8") };
+  if (result.status !== 0 || result.error) {
+    writeFileSync(errorFile, JSON.stringify(diagnostic, null, 2));
+    throw new Error("snapshot helper failed for " + label + ": " + JSON.stringify(diagnostic));
   }
-  return acc;
-}
-
-function snapshotRoots(label) {
-  const snapshot = {
-    documents: walk(DOC),
-    workspace: walk(WS),
-    outputs: walk(OUT),
+  let snapshot;
+  try {
+    snapshot = JSON.parse(result.stdout);
+  } catch {
+    writeFileSync(errorFile, JSON.stringify({ ...diagnostic, reason: "invalid JSON" }, null, 2));
+    throw new Error("snapshot helper returned invalid JSON for " + label);
+  }
+  const validEntry = (f) => isRecord(f) && Object.keys(f).sort().join(",") ===
+    (f.content === undefined ? "gid,mode,path,sha256,size,uid" : "content,gid,mode,path,sha256,size,uid") &&
+    typeof f.path === "string" && f.path.length > 0 && !f.path.startsWith("/") &&
+    !f.path.split("/").includes("..") && Number.isSafeInteger(f.size) && f.size >= 0 &&
+    /^[0-7]{1,3}$/.test(f.mode) && Number.isSafeInteger(f.uid) && Number.isSafeInteger(f.gid) &&
+    /^[a-f0-9]{64}$/.test(f.sha256) &&
+    (f.size < 4096 ? typeof f.content === "string" : f.content === undefined);
+  const pathOrder = (left, right) => {
+    const a = left.path.split("/");
+    const b = right.path.split("/");
+    const index = a.findIndex((part, i) => part !== b[i]);
+    return index === -1 ? 0 : a[index] < b[index] ? -1 : 1;
   };
+  if (!isRecord(snapshot) || Object.keys(snapshot).sort().join(",") !== "documents,outputs,workspace" ||
+    !Object.values(snapshot).every((files) => Array.isArray(files) && files.every(validEntry) &&
+      files.every((f, index) => index === 0 || pathOrder(files[index - 1], f) < 0))) {
+    writeFileSync(errorFile, JSON.stringify({ ...diagnostic, reason: "invalid snapshot shape" }, null, 2));
+    throw new Error("snapshot helper returned invalid snapshot shape for " + label);
+  }
   writeFileSync(join(EVID, label + "-roots-snapshot.json"), JSON.stringify(snapshot, null, 2));
   return snapshot;
 }
@@ -594,7 +610,7 @@ async function main() {
     outcome.run1.summaryAfterMutation = summary1.envelope;
 
     // ---- EOF shutdown ----
-    outcome.run1.rootsDuringRun = snapshotRoots("run1-live");
+    outcome.run1.rootsDuringRun = snapshotRoots("run1-live", run1.name);
     run1.session.endStdin();
     const exit1 = await run1.session.waitExit();
     check("run1 stdin EOF exits with status 0 and no signal", exit1.code === 0 && exit1.signal === null, exit1);
