@@ -55,6 +55,19 @@ node scripts/container-smoke/smoke.mjs
   the harness writes its own reference seed. The seed's SHA-256 (over the exact
   bytes placed in `roots/documents/seed.json`) is recorded in the manifest.
 
+The harness sets the empty evidence root and its `roots/` parent to private
+`0700`. Its freshly created workspace and outputs bind-mount roots are `0777`
+so the fixed container uid `1000:1000` can write even when the host runner
+owns those directories under a different uid; the documents root is `0755`
+and its copied seed and role markers are `0644` for read-only container access
+under restrictive host umasks. No permissions on the supplied seed source or
+ancestors of the evidence root are changed. Other host users cannot traverse
+into these permissive role roots through the private evidence parent. This
+assumes a local rootful Docker daemon or a rootless daemon running as the
+invoking host user, able to bind-mount the private parent; unusual user-namespace
+or remote-daemon mappings may still require a compatible host setup. CI's
+evidence root is ephemeral and is not uploaded.
+
 Exit status is `0` only when every check passes; any failed check exits
 non-zero and writes a `smoke-failure.json` naming the check and its observed
 detail.

@@ -13,7 +13,7 @@
 // In-container helper scripts are resolved from this harness's own directory,
 // never from a hard-coded path.
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -57,6 +57,9 @@ if (existsSync(EVID)) {
 } else {
   mkdirSync(EVID, { recursive: true });
 }
+// Only the supplied empty evidence root is re-moded. Its host-side evidence
+// remains private even though the container bind-mounts below are portable.
+chmodSync(EVID, 0o700);
 
 const writeFailureArtifact = (payload) => {
   try {
@@ -118,10 +121,20 @@ const IMAGE_INFO = {
 
 // ---- evidence layout ------------------------------------------------------
 
-const DOC = join(EVID, "roots", "documents");
-const WS = join(EVID, "roots", "workspace");
-const OUT = join(EVID, "roots", "outputs");
-for (const dir of [DOC, WS, OUT]) mkdirSync(dir, { recursive: true });
+const ROOTS = join(EVID, "roots");
+const DOC = join(ROOTS, "documents");
+const WS = join(ROOTS, "workspace");
+const OUT = join(ROOTS, "outputs");
+mkdirSync(ROOTS);
+chmodSync(ROOTS, 0o700);
+for (const dir of [DOC, WS, OUT]) mkdirSync(dir);
+// Docker keeps host ownership on bind mounts. The fixed container uid 1000
+// must be able to write even when the runner creates these as a different uid.
+// Explicit chmod defeats a restrictive host umask; the private EVID parent
+// prevents other host users from traversing into these writable role roots.
+chmodSync(DOC, 0o755);
+chmodSync(WS, 0o777);
+chmodSync(OUT, 0o777);
 
 const LIVE_SCRIPT = readFileSync(join(HARNESS_DIR, "live-inspect.cjs"), "utf8");
 const INSPECT_DIRS_SCRIPT = readFileSync(join(HARNESS_DIR, "inspect-dirs.mjs"), "utf8");
@@ -159,6 +172,7 @@ const sha256 = (buffer) => createHash("sha256").update(buffer).digest("hex");
 // then record the seed's SHA-256 over the exact bytes in documents/seed.json.
 const seedBytes = seedSource === "provided" ? readFileSync(seedProvidedPath) : Buffer.from(REFERENCE_SEED, "utf8");
 writeFileSync(join(DOC, "seed.json"), seedBytes);
+chmodSync(join(DOC, "seed.json"), 0o644);
 const SEED_SHA256 = sha256(seedBytes);
 const SEED_INFO = {
   source: seedSource,
@@ -415,7 +429,9 @@ function buildManifest(result, extra) {
 
 async function main() {
   for (const [role, value] of Object.entries(MARKERS)) {
-    writeFileSync(join(EVID, "roots", role, ".d1-smoke-host-marker.txt"), value + "\n");
+    const marker = join(ROOTS, role, ".d1-smoke-host-marker.txt");
+    writeFileSync(marker, value + "\n");
+    chmodSync(marker, 0o644);
   }
   const run1 = startRun("run1", true);
   const outcome = { run1: {}, run2: {}, run3: {}, run4: {} };
