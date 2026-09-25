@@ -1,0 +1,34 @@
+# Version control and governance state never enter the build context.
+.git
+.pi
+.atl
+.codegraph
+.github
+.vitest
+odd
+openspec
+
+# Dependencies, caches, build outputs, and test artifacts.
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+test-results
+playwright-report
+
+# Package test suites are never shipped in the runtime image.
+**/tests
+**/tests-integration
+**/e2e
+
+# Editor source and dist stay out; keep only the manifest so npm workspaces
+# resolve the root lockfile during the exact-lock install.
+apps/editor/*
+!apps/editor/package.json
+
+# The generated validator is ephemeral: the builder must regenerate it
+# deterministically instead of shipping bytes from the local tree.
+packages/scene-document/src/generated/scene-document-v1-validator.generated.mjs
+
+# The build recipe never ships in the runtime image: the Dockerfile drives
+# the build definition only and must not ride along in the copied app tree.
+apps/headless-mcp/Dockerfile
