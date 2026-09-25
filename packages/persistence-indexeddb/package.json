@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@particle-studio/persistence": "0.0.0",
+    "@particle-studio/scene-document": "0.0.0",
     "dexie": "4.4.6"
   }
 }

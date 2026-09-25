@@ -29,8 +29,8 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Prepare generated validator
         run: npm run validator:prepare
-      - name: Test SceneDocument, runtime, commands, and persistence
-        run: npx vitest run --project core packages/scene-document/tests packages/runtime/tests packages/commands/tests packages/persistence/tests
+      - name: Test SceneDocument, runtime, commands, and IndexedDB persistence
+        run: npx vitest run --project core packages/scene-document/tests packages/runtime/tests packages/commands/tests packages/persistence/tests packages/persistence-indexeddb/tests
       - name: Smoke-test Canvas2D entrypoint
         run: npx vitest run --project integration packages/renderer-canvas2d/tests/entrypoint.smoke.test.ts
       - name: Typecheck focused packages
@@ -40,3 +40,4 @@ jobs:
           npx tsc -p packages/renderer-canvas2d/tsconfig.json --noEmit --pretty false
           npx tsc -p packages/commands/tsconfig.json --noEmit --pretty false
           npx tsc -p packages/persistence/tsconfig.json --noEmit --pretty false
+          npx tsc -p packages/persistence-indexeddb/tsconfig.json --noEmit --pretty false
