@@ -31,6 +31,10 @@ jobs:
         run: npm run validator:prepare
       - name: Test SceneDocument, runtime, commands, and persistence adapters
         run: npx vitest run --project core packages/scene-document/tests packages/runtime/tests packages/commands/tests packages/persistence/tests packages/persistence-indexeddb/tests packages/persistence-fs/tests packages/export/tests packages/webmcp-adapter/tests apps/headless-mcp/tests
+      - name: Prepare validator for editor tests
+        run: npm run validator:prepare
+      - name: Test editor command boundary
+        run: npx vitest run --project ui apps/editor/tests/durable-command-bridge.test.tsx apps/editor/tests/browser-agent-workspace-port.test.tsx
       - name: Smoke-test Canvas2D entrypoint
         run: npx vitest run --project integration packages/renderer-canvas2d/tests/entrypoint.smoke.test.ts
       - name: Test headless MCP stdio and static container contract
@@ -47,6 +51,7 @@ jobs:
           npx tsc -p packages/export/tsconfig.json --noEmit --pretty false
           npx tsc -p packages/webmcp-adapter/tsconfig.json --noEmit --pretty false
           npx tsc -p apps/headless-mcp/tsconfig.json --noEmit --pretty false
+          npx tsc -p apps/editor/tsconfig.json --noEmit --pretty false
       - name: Build headless MCP smoke image
         timeout-minutes: 20
         run: docker build --progress=plain -f apps/headless-mcp/Dockerfile -t particle-studio-headless-mcp:d1-smoke .
