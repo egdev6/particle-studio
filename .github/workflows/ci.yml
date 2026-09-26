@@ -31,6 +31,8 @@ jobs:
         run: npm run validator:prepare
       - name: Test SceneDocument, runtime, commands, and persistence adapters
         run: npx vitest run --project core packages/scene-document/tests packages/runtime/tests packages/commands/tests packages/persistence/tests packages/persistence-indexeddb/tests packages/persistence-fs/tests packages/export/tests packages/webmcp-adapter/tests apps/headless-mcp/tests
+      - name: Prepare validator for editor tests
+        run: npm run validator:prepare
       - name: Test editor command boundary
         run: npx vitest run --project ui apps/editor/tests/durable-command-bridge.test.tsx apps/editor/tests/browser-agent-workspace-port.test.tsx
       - name: Smoke-test Canvas2D entrypoint
