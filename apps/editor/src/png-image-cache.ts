@@ -95,18 +95,34 @@ function isCloseableHandle(handle: unknown): handle is object {
 }
 
 const safeApply: typeof Reflect.apply = Reflect.apply;
+// A closeable identity belongs to one cache until its last alias is released.
+const activeHandles = new WeakMap<object, object>();
+const retiredHandles = new WeakSet<object>();
 
 export function createPngImageCache(
   dependencies: PngImageCacheDependencies,
 ): PngImageCache {
   const entries = new Map<string, CachedPngImage>();
   const owners = new Map<unknown, number>();
-  const disposed = new WeakSet<object>();
+  const identity = {};
   let disposing = false;
 
+  function canClaim(handle: unknown): boolean {
+    return !isCloseableHandle(handle) ||
+      (!retiredHandles.has(handle) &&
+        (activeHandles.get(handle) === undefined || activeHandles.get(handle) === identity));
+  }
+
+  function claim(handle: unknown): void {
+    if (isCloseableHandle(handle)) activeHandles.set(handle, identity);
+    owners.set(handle, (owners.get(handle) ?? 0) + 1);
+  }
+
   function disposeOnce(handle: unknown): void {
-    if (!isCloseableHandle(handle) || disposed.has(handle)) return;
-    disposed.add(handle);
+    if (!isCloseableHandle(handle) || retiredHandles.has(handle)) return;
+    // Retire before invoking untrusted close code so reentrant imports cannot reclaim it.
+    retiredHandles.add(handle);
+    activeHandles.delete(handle);
     disposing = true;
     try {
       const close = (handle as { readonly close?: unknown }).close;
@@ -131,7 +147,7 @@ export function createPngImageCache(
   }
 
   function discardUnowned(handle: unknown): void {
-    if (!owners.has(handle)) disposeOnce(handle);
+    if (!owners.has(handle) && canClaim(handle)) disposeOnce(handle);
   }
 
   return {
@@ -160,8 +176,11 @@ export function createPngImageCache(
 
       const established = entries.get(image.sha256);
       if (established === undefined) {
+        if (!canClaim(image.handle)) {
+          throw new PngImageCacheError("EDITOR_PNG_CACHE_IMPORT_FAILED");
+        }
+        claim(image.handle);
         entries.set(image.sha256, image);
-        owners.set(image.handle, (owners.get(image.handle) ?? 0) + 1);
         return Object.freeze({ ...image });
       }
 

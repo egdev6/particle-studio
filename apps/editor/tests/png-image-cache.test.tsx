@@ -153,6 +153,82 @@ describe("persistent PNG image cache", () => {
     expect(shared.close).toHaveBeenCalledTimes(1);
   });
 
+  it("reserves active handles across caches without closing foreign candidates", async () => {
+    const shared = { close: vi.fn() };
+    const first = cacheFor([candidate(shared), candidate(shared, "sha-b")]);
+    const second = cacheFor([candidate(shared), candidate(shared, "sha-c")]);
+    await first.importPng(input());
+    await first.importPng(input());
+    await expectCacheError(second.importPng(input()), "EDITOR_PNG_CACHE_IMPORT_FAILED");
+    expect(second.resolveImage(reference())).toBeNull();
+    expect(shared.close).not.toHaveBeenCalled();
+    expect(first.removeImage(reference())).toBe(true);
+    await expectCacheError(second.importPng(input()), "EDITOR_PNG_CACHE_IMPORT_FAILED");
+    expect(shared.close).not.toHaveBeenCalled();
+    first.clear();
+    expect(shared.close).toHaveBeenCalledTimes(1);
+    await expectCacheError(second.importPng(input()), "EDITOR_PNG_CACHE_IMPORT_FAILED");
+    expect(shared.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("never reclaims retired identities or closes retired duplicate candidates twice", async () => {
+    const retired = { close: vi.fn() };
+    const first = cacheFor([candidate(retired), candidate(retired, "sha-b")]);
+    await first.importPng(input());
+    first.clear();
+    await expectCacheError(first.importPng(input()), "EDITOR_PNG_CACHE_IMPORT_FAILED");
+    const second = cacheFor([candidate(retired)]);
+    await expectCacheError(second.importPng(input()), "EDITOR_PNG_CACHE_IMPORT_FAILED");
+    expect(retired.close).toHaveBeenCalledTimes(1);
+    const live = { close: vi.fn() };
+    const duplicate = cacheFor([candidate(live), candidate(retired)]);
+    await duplicate.importPng(input());
+    expect((await duplicate.importPng(input())).handle).toBe(live);
+    expect(retired.close).toHaveBeenCalledTimes(1);
+    duplicate.clear();
+  });
+
+  it("does not close foreign duplicate or conflicting candidates", async () => {
+    const foreign = { close: vi.fn() };
+    const owner = cacheFor([candidate(foreign)]);
+    const local = { close: vi.fn() };
+    const other = cacheFor([
+      candidate(local),
+      candidate(foreign),
+      candidate(foreign, "sha-a", 21),
+    ]);
+    await owner.importPng(input());
+    await other.importPng(input());
+    expect((await other.importPng(input())).handle).toBe(local);
+    await expectCacheError(other.importPng(input()), "EDITOR_PNG_CACHE_METADATA_CONFLICT");
+    expect(foreign.close).not.toHaveBeenCalled();
+    other.clear();
+    expect(local.close).toHaveBeenCalledTimes(1);
+    owner.clear();
+    expect(foreign.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps primitive handles usable across cache instances", async () => {
+    const first = cacheFor([candidate("shared")]);
+    const second = cacheFor([candidate("shared")]);
+    await first.importPng(input());
+    expect((await second.importPng(input())).handle).toBe("shared");
+    first.clear();
+    second.clear();
+  });
+
+  it("contains cross-cache reentrant claims during disposal", async () => {
+    let foreign: ReturnType<typeof cacheFor>;
+    let pending: Promise<unknown> | undefined;
+    const shared = { close: vi.fn(() => { pending = foreign.importPng(input()); }) };
+    const owner = cacheFor([candidate(shared)]);
+    foreign = cacheFor([candidate(shared)]);
+    await owner.importPng(input());
+    owner.clear();
+    await expectCacheError(pending!, "EDITOR_PNG_CACHE_IMPORT_FAILED");
+    expect(shared.close).toHaveBeenCalledTimes(1);
+  });
+
   it("contains hostile close and blocks mutation during reentrant disposal", async () => {
     let cache: ReturnType<typeof cacheFor>;
     const other = { close: vi.fn() };
