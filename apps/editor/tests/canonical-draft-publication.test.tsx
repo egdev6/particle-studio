@@ -45,14 +45,17 @@ function fixture(document: unknown = imageDocument) {
     writeCompleteRevisionIfPointersMatch,
   };
   const handle = { close: vi.fn() };
+  const handles = [] as typeof handle[];
   const rereadVerifiedPng = vi.fn(async () => {
     events.push("reread");
     return { sha256: hash, mimeType: "image/png", byteLength: 3, bytes: bytes.slice() };
   });
   const decodeVerifiedPng = vi.fn(async (asset: { sha256: string; bytes: Uint8Array }) => {
     events.push("decode");
+    const decodedHandle = handles.length === 0 ? handle : { close: vi.fn() };
+    handles.push(decodedHandle);
     return { ...asset, mimeType: "image/png", byteLength: 3,
-      width: 20, height: 10, handle };
+      width: 20, height: 10, handle: decodedHandle };
   });
   const cache = createPngImageCache({
     importVerifiedPng: async () => { throw new Error("unexpected import"); },
@@ -63,7 +66,7 @@ function fixture(document: unknown = imageDocument) {
     revisionId: () => "draft-1", sequence: 3, createdAt: () => 1234,
     persistence: adapter, cache, prehydration: { rereadVerifiedPng, decodeVerifiedPng },
   };
-  return { options, saved, pointers, events, handle, writeCompleteRevision,
+  return { options, saved, pointers, events, handle, handles, writeCompleteRevision,
     writeCompleteRevisionIfPointersMatch, setPointers: (next: typeof pointers) => { currentPointers = next; },
     rereadVerifiedPng, decodeVerifiedPng, adapter };
 }
@@ -158,7 +161,7 @@ describe("first canonical draft publication", () => {
     f.adapter.writeCompleteRevisionIfPointersMatch = redirectedWrite;
     expect(f.options.persistence).toBe(f.adapter);
     finishRead(f.pointers);
-    await expect(pending).rejects.toThrow("disk");
+    await expect(pending).rejects.toThrow("EDITOR_CANONICAL_DRAFT_WRITE_FAILED");
     expect(f.writeCompleteRevisionIfPointersMatch).toHaveBeenCalledTimes(1);
     expect(redirectedWrite).not.toHaveBeenCalled();
     expect(f.handle.close).toHaveBeenCalledTimes(1);
@@ -211,9 +214,168 @@ describe("first canonical draft publication", () => {
     await expect(publishFirstCanonicalDraft(f.options)).rejects.toThrow();
     expect(f.writeCompleteRevisionIfPointersMatch).not.toHaveBeenCalled();
     f.writeCompleteRevisionIfPointersMatch.mockRejectedValueOnce(new Error("disk"));
-    await expect(publishFirstCanonicalDraft(f.options)).rejects.toThrow("disk");
+    await expect(publishFirstCanonicalDraft(f.options)).rejects.toThrow("EDITOR_CANONICAL_DRAFT_WRITE_FAILED");
     expect(f.handle.close).toHaveBeenCalledTimes(1);
     expect(f.writeCompleteRevision).not.toHaveBeenCalled();
+  });
+
+  it("replaces a live publication only after CAS, closes its old lease once, and retries exactly without effects", async () => {
+    const f = fixture();
+    const prior = await publishFirstCanonicalDraft(f.options);
+    const replacementOptions = { ...f.options, revisionId: () => "draft-2", sequence: 4,
+      priorPublication: prior };
+    let finishWrite!: () => void;
+    f.writeCompleteRevisionIfPointersMatch.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { finishWrite = resolve; });
+      f.events.push("write");
+    });
+    let exposed = false;
+    const pending = publishFirstCanonicalDraft(replacementOptions).then((value) => {
+      exposed = true;
+      return value;
+    });
+    await vi.waitFor(() => expect(finishWrite).toBeDefined());
+    expect(exposed).toBe(false);
+    expect(f.handle.close).not.toHaveBeenCalled();
+    f.setPointers(f.writeCompleteRevisionIfPointersMatch.mock.calls[1]![2]);
+    finishWrite();
+    const next = await pending;
+    expect(next.pointers.saved).toEqual(f.saved);
+    expect(next.pointers.draft?.revisionId).toBe("draft-2");
+    // Both leases share the cache's established handle; the duplicate decode is discarded.
+    expect(f.handle.close).not.toHaveBeenCalled();
+    expect(f.handles[1]!.close).toHaveBeenCalledTimes(1);
+    const writes = f.writeCompleteRevisionIfPointersMatch.mock.calls.length;
+    const rereads = f.rereadVerifiedPng.mock.calls.length;
+    const retry = await publishFirstCanonicalDraft({ ...replacementOptions, priorPublication: next,
+      editableJson: JSON.stringify(imageDocument, null, 2) });
+    expect(retry).toBe(next);
+    expect(f.writeCompleteRevisionIfPointersMatch).toHaveBeenCalledTimes(writes);
+    expect(f.rereadVerifiedPng).toHaveBeenCalledTimes(rereads);
+    prior.release();
+    expect(f.handle.close).not.toHaveBeenCalled();
+    next.release();
+    expect(f.handle.close).toHaveBeenCalledTimes(1);
+    expect(f.handles[1]!.close).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["draft-1", "draft-2"])("rejects a %s identity callback that releases its prior before retry or replacement", async (id) => {
+    const f = fixture();
+    const prior = await publishFirstCanonicalDraft(f.options);
+    const pending = publishFirstCanonicalDraft({ ...f.options, priorPublication: prior,
+      revisionId: () => { prior.release(); return id; }, sequence: id === "draft-1" ? 3 : 4 });
+    await expect(pending).rejects.toThrow("EDITOR_CANONICAL_DRAFT_PRIOR_MISMATCH");
+    expect(f.writeCompleteRevisionIfPointersMatch).toHaveBeenCalledTimes(1);
+    expect(f.rereadVerifiedPng).toHaveBeenCalledTimes(1);
+    expect(f.handle.close).toHaveBeenCalledTimes(1);
+    prior.release();
+    expect(f.handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes a committed replacement if its caller releases prior during pending CAS", async () => {
+    const f = fixture();
+    const prior = await publishFirstCanonicalDraft(f.options);
+    let finishWrite!: () => void;
+    f.writeCompleteRevisionIfPointersMatch.mockImplementationOnce(async (_revision, expected, next) => {
+      await new Promise<void>((resolve) => { finishWrite = resolve; });
+      f.setPointers(next);
+    });
+    const pending = publishFirstCanonicalDraft({ ...f.options, priorPublication: prior,
+      revisionId: () => "draft-2", sequence: 4 });
+    await vi.waitFor(() => expect(finishWrite).toBeDefined());
+    prior.release();
+    expect(f.handle.close).not.toHaveBeenCalled();
+    finishWrite();
+    const next = await pending;
+    expect(next.pointers.draft?.revisionId).toBe("draft-2");
+    expect(f.writeCompleteRevisionIfPointersMatch).toHaveBeenCalledTimes(2);
+    expect(f.handle.close).not.toHaveBeenCalled();
+    expect(f.handles[1]!.close).toHaveBeenCalledTimes(1);
+    prior.release();
+    next.release();
+    next.release();
+    expect(f.handle.close).toHaveBeenCalledTimes(1);
+    expect(f.handles[1]!.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the prior live publication on failed replacement and rejects stale pointer intent", async () => {
+    const f = fixture();
+    const prior = await publishFirstCanonicalDraft(f.options);
+    const replace = { ...f.options, revisionId: () => "draft-2", sequence: 4,
+      priorPublication: prior };
+    f.writeCompleteRevisionIfPointersMatch.mockRejectedValueOnce(new Error("secret disk"));
+    await expect(publishFirstCanonicalDraft(replace)).rejects.toThrow("EDITOR_CANONICAL_DRAFT_WRITE_FAILED");
+    expect(f.handle.close).not.toHaveBeenCalled();
+    expect(f.handles[1]!.close).toHaveBeenCalledTimes(1);
+    expect(prior.pointers.draft?.revisionId).toBe("draft-1");
+    f.setPointers(f.pointers);
+    await expect(publishFirstCanonicalDraft(replace)).rejects.toThrow("EDITOR_CANONICAL_DRAFT_PRIOR_MISMATCH");
+    expect(f.writeCompleteRevisionIfPointersMatch).toHaveBeenCalledTimes(2);
+    prior.release();
+    expect(f.handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects altered retry content, changed revision identity, and a released prior without writing", async () => {
+    const f = fixture();
+    const prior = await publishFirstCanonicalDraft(f.options);
+    const attempts = [
+      { ...f.options, priorPublication: prior, editableJson: JSON.stringify(FIRST_SLICE_DOCUMENT) },
+      { ...f.options, priorPublication: prior, revisionId: () => "different" },
+      { ...f.options, priorPublication: prior, sequence: 4 },
+    ];
+    for (const attempt of attempts)
+      await expect(publishFirstCanonicalDraft(attempt)).rejects.toThrow("EDITOR_FIRST_DRAFT_INELIGIBLE");
+    expect(f.writeCompleteRevisionIfPointersMatch).toHaveBeenCalledTimes(1);
+    prior.release();
+    await expect(publishFirstCanonicalDraft({ ...f.options, priorPublication: prior }))
+      .rejects.toThrow("EDITOR_CANONICAL_DRAFT_PRIOR_MISMATCH");
+    expect(f.handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["saved", "draft"] as const)("preserves the old publication on a %s pointer race during replacement", async (changed) => {
+    const f = fixture();
+    const prior = await publishFirstCanonicalDraft(f.options);
+    let resume!: () => void;
+    f.rereadVerifiedPng.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { resume = resolve; });
+      return { sha256: hash, mimeType: "image/png", byteLength: 3, bytes: bytes.slice() };
+    });
+    const pending = publishFirstCanonicalDraft({ ...f.options, priorPublication: prior,
+      revisionId: () => "draft-2", sequence: 4 });
+    await vi.waitFor(() => expect(resume).toBeDefined());
+    f.setPointers(createRevisionPointersSnapshot({
+      saved: changed === "saved" ? createSavedRevisionPointer(createCompleteRevision({
+        documentId: "doc-1", revisionId: "saved-2", sequence: 3, document: FIRST_SLICE_DOCUMENT,
+      })) : f.saved,
+      draft: changed === "draft" ? { kind: "draft", documentId: "doc-1", revisionId: "rival", sequence: 4 }
+        : prior.pointers.draft,
+    }));
+    resume();
+    await expect(pending).rejects.toThrow("EDITOR_CANONICAL_DRAFT_WRITE_FAILED");
+    expect(f.handle.close).not.toHaveBeenCalled();
+    expect(f.handles[1]!.close).toHaveBeenCalledTimes(1);
+    prior.release();
+    expect(f.handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves live prior leases through planning, read, identity and prehydration failures", async () => {
+    const f = fixture();
+    const prior = await publishFirstCanonicalDraft(f.options);
+    const replace = { ...f.options, sequence: 4, revisionId: () => "draft-2", priorPublication: prior };
+    await expect(publishFirstCanonicalDraft({ ...replace, editableJson: "{" }))
+      .rejects.toThrow();
+    vi.mocked(f.adapter.readPointers).mockRejectedValueOnce(new Error("private read"));
+    await expect(publishFirstCanonicalDraft(replace)).rejects.toThrow("EDITOR_CANONICAL_DRAFT_POINTER_READ_FAILED");
+    vi.mocked(f.adapter.readPointers).mockResolvedValueOnce(null as never);
+    await expect(publishFirstCanonicalDraft(replace)).rejects.toThrow("EDITOR_CANONICAL_DRAFT_POINTER_READ_FAILED");
+    await expect(publishFirstCanonicalDraft({ ...replace, revisionId: () => { throw new Error("private identity"); } }))
+      .rejects.toThrow("EDITOR_CANONICAL_DRAFT_IDENTITY_FAILED");
+    f.rereadVerifiedPng.mockRejectedValueOnce(new Error("private asset"));
+    await expect(publishFirstCanonicalDraft(replace)).rejects.toThrow("EDITOR_CANONICAL_PREHYDRATION_FAILED");
+    expect(f.writeCompleteRevisionIfPointersMatch).toHaveBeenCalledTimes(1);
+    expect(f.handle.close).not.toHaveBeenCalled();
+    prior.release();
+    expect(f.handle.close).toHaveBeenCalledTimes(1);
   });
 
   it("does not expose the workspace before the conditional write finishes", async () => {
@@ -254,7 +416,7 @@ describe("first canonical draft publication", () => {
       draft: changed === "draft" ? { kind: "draft", documentId: "doc-1", revisionId: "rival", sequence: 3 } : null,
     }));
     resume();
-    await expect(publication).rejects.toThrow("stale pointers");
+    await expect(publication).rejects.toThrow("EDITOR_CANONICAL_DRAFT_WRITE_FAILED");
     expect(f.writeCompleteRevisionIfPointersMatch).toHaveBeenCalledTimes(1);
     expect(f.writeCompleteRevision).not.toHaveBeenCalled();
     expect(f.handle.close).toHaveBeenCalledTimes(1);
