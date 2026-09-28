@@ -40,6 +40,92 @@ async function expectCacheError(pending: Promise<unknown>, code: string) {
   });
 }
 
+describe("staged PNG leases", () => {
+  it("keeps staged entries visible until the final independent lease release", () => {
+    const handle = { close: vi.fn() };
+    const cache = cacheFor([]);
+    const first = cache.adoptStaged(candidate(handle));
+    const second = cache.adoptStaged(candidate(handle));
+    expect(first?.image.handle).toBe(handle);
+    expect(second?.image.handle).toBe(handle);
+    expect(cache.resolveImage(reference())?.handle).toBe(handle);
+    first?.release();
+    first?.release();
+    expect(cache.resolveImage(reference())?.handle).toBe(handle);
+    second?.release();
+    expect(cache.resolveImage(reference())).toBeNull();
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("promotes a staged handle and retains leases after persistent removal", async () => {
+    const staged = { close: vi.fn() };
+    const decoded = { close: vi.fn() };
+    const cache = cacheFor([candidate(decoded)]);
+    const lease = cache.adoptStaged(candidate(staged))!;
+    expect((await cache.importPng(input())).handle).toBe(staged);
+    expect(decoded.close).toHaveBeenCalledTimes(1);
+    expect(cache.removeImage(reference())).toBe(true);
+    expect(cache.resolveImage(reference())?.handle).toBe(staged);
+    lease.release();
+    expect(cache.resolveImage(reference())).toBeNull();
+    expect(staged.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a stale lease release a later entry with the same key", () => {
+    const cache = cacheFor([]);
+    const stale = cache.adoptStaged(candidate("first"))!;
+    cache.clear();
+    const current = cache.adoptStaged(candidate("second"))!;
+    stale.release();
+    expect(cache.resolveImage(reference())?.handle).toBe("second");
+    current.release();
+    expect(cache.resolveImage(reference())).toBeNull();
+  });
+
+  it("disposes unowned candidates once and prevents reentrant reclamation", () => {
+    let other: ReturnType<typeof cacheFor>;
+    const handle = { close: vi.fn(() => {
+      expect(other.adoptStaged(candidate(handle))).toBeNull();
+      other.disposeCandidate(candidate(handle));
+    }) };
+    const cache = cacheFor([]);
+    other = cacheFor([]);
+    cache.disposeCandidate(candidate(handle));
+    cache.disposeCandidate(candidate(handle));
+    expect(handle.close).toHaveBeenCalledTimes(1);
+    expect(cache.adoptStaged(candidate(handle))).toBeNull();
+  });
+
+  it("preserves persistent ownership across lease release and ignores invalid candidates", async () => {
+    const handle = { close: vi.fn() };
+    const cache = cacheFor([candidate(handle)]);
+    await cache.importPng(input());
+    const lease = cache.adoptStaged(candidate(handle))!;
+    expect(cache.adoptStaged({ ...candidate(handle), width: 0 })).toBeNull();
+    cache.disposeCandidate(candidate(handle));
+    lease.release();
+    lease.release();
+    expect(cache.resolveImage(reference())?.handle).toBe(handle);
+    expect(handle.close).not.toHaveBeenCalled();
+    cache.clear();
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects conflicts and foreign claims without displacing owners", () => {
+    const handle = { close: vi.fn() };
+    const foreign = cacheFor([]);
+    const local = cacheFor([]);
+    const lease = foreign.adoptStaged(candidate(handle))!;
+    expect(local.adoptStaged(candidate(handle, "sha-b"))).toBeNull();
+    local.disposeCandidate(candidate(handle));
+    expect(handle.close).not.toHaveBeenCalled();
+    expect(foreign.adoptStaged(candidate(handle, "sha-a", 21))).toBeNull();
+    expect(foreign.resolveImage(reference())?.handle).toBe(handle);
+    lease.release();
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("persistent PNG image cache", () => {
   it("publishes only after decode and returns frozen defensive exact metadata", async () => {
     let release!: (image: ReturnType<typeof candidate>) => void;

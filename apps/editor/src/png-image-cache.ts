@@ -31,7 +31,14 @@ export class PngImageCacheError extends Error {
   }
 }
 
+export interface PngImageLease {
+  readonly image: CachedPngImage;
+  release(): void;
+}
+
 export interface PngImageCache {
+  adoptStaged(candidate: unknown): PngImageLease | null;
+  disposeCandidate(candidate: unknown): void;
   importPng(input: {
     readonly mimeType: string;
     readonly bytes: Uint8Array;
@@ -103,6 +110,9 @@ export function createPngImageCache(
   dependencies: PngImageCacheDependencies,
 ): PngImageCache {
   const entries = new Map<string, CachedPngImage>();
+  const persistent = new Set<string>();
+  const leases = new Map<string, number>();
+  const generations = new Map<string, object>();
   const owners = new Map<unknown, number>();
   const identity = {};
   let disposing = false;
@@ -151,6 +161,50 @@ export function createPngImageCache(
   }
 
   return {
+    adoptStaged(candidate) {
+      if (disposing) return null;
+      const image = observeCandidate(candidate);
+      if (image === null) return null;
+      const established = entries.get(image.sha256);
+      if (established !== undefined && !hasExactMetadata(established, image)) return null;
+      if (established === undefined) {
+        if (!canClaim(image.handle)) return null;
+        claim(image.handle);
+        entries.set(image.sha256, image);
+        generations.set(image.sha256, {});
+      } else if (!Object.is(image.handle, established.handle)) {
+        discardUnowned(image.handle);
+      }
+      leases.set(image.sha256, (leases.get(image.sha256) ?? 0) + 1);
+      const generation = generations.get(image.sha256) ?? {};
+      generations.set(image.sha256, generation);
+      let released = false;
+      return Object.freeze({
+        image: Object.freeze({ ...(established ?? image) }),
+        release() {
+          if (released) return;
+          released = true;
+          if (generations.get(image.sha256) !== generation) return;
+          const count = leases.get(image.sha256);
+          if (count === undefined) return;
+          if (count > 1) leases.set(image.sha256, count - 1);
+          else {
+            leases.delete(image.sha256);
+            if (!persistent.has(image.sha256)) {
+              const entry = entries.get(image.sha256);
+              entries.delete(image.sha256);
+              generations.delete(image.sha256);
+              if (entry !== undefined) release(entry.handle);
+            }
+          }
+        },
+      });
+    },
+    disposeCandidate(candidate) {
+      if (disposing) return;
+      const image = observeCandidate(candidate);
+      if (image !== null) discardUnowned(image.handle);
+    },
     async importPng(input) {
       if (disposing) {
         throw new PngImageCacheError("EDITOR_PNG_CACHE_IMPORT_FAILED");
@@ -181,6 +235,8 @@ export function createPngImageCache(
         }
         claim(image.handle);
         entries.set(image.sha256, image);
+        generations.set(image.sha256, {});
+        persistent.add(image.sha256);
         return Object.freeze({ ...image });
       }
 
@@ -190,6 +246,7 @@ export function createPngImageCache(
       if (!hasExactMetadata(established, image)) {
         throw new PngImageCacheError("EDITOR_PNG_CACHE_METADATA_CONFLICT");
       }
+      persistent.add(image.sha256);
       return Object.freeze({ ...established });
     },
 
@@ -211,8 +268,12 @@ export function createPngImageCache(
         if (entry === undefined || !hasExactMetadata(entry, reference)) {
           return false;
         }
-        entries.delete(entry.sha256);
-        release(entry.handle);
+        if (!persistent.delete(entry.sha256)) return false;
+        if (!leases.has(entry.sha256)) {
+          entries.delete(entry.sha256);
+          generations.delete(entry.sha256);
+          release(entry.handle);
+        }
         return true;
       } catch {
         return false;
@@ -223,6 +284,9 @@ export function createPngImageCache(
       if (disposing) return;
       const handles = [...owners.keys()];
       entries.clear();
+      persistent.clear();
+      leases.clear();
+      generations.clear();
       owners.clear();
       for (const handle of handles) disposeOnce(handle);
     },
