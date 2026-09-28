@@ -264,6 +264,23 @@ describe("durable PNG integrity primitive", () => {
     });
   });
 
+  it("hashes the durable reread bytes independently of accepted input", async () => {
+    const hashInputs: number[][] = [];
+    const rereadBytes = new Uint8Array([1, 2, 4]);
+    const dependencies = createDependencies({
+      read: async () => asset({ bytes: rereadBytes }),
+      sha256: async (bytes) => {
+        hashInputs.push(Array.from(bytes));
+        return PNG_SHA256;
+      },
+    });
+
+    await expect(importPng(dependencies)).rejects.toMatchObject({
+      code: "EDITOR_PNG_ASSET_VERIFICATION_FAILED",
+    });
+    expect(hashInputs).toEqual([Array.from(PNG_BYTES), Array.from(rereadBytes)]);
+  });
+
   it.each([
     ["written address", { write: async () => asset({ sha256: OTHER_SHA256 }) }],
     ["reread address", { read: async () => asset({ sha256: OTHER_SHA256 }) }],
