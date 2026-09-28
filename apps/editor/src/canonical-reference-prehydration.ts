@@ -68,6 +68,37 @@ async function hashBytes(bytes: Uint8Array): Promise<string> {
   return `sha256:${[...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
+// Each key points to the newest pending invocation; callers retain their own
+// predecessors even when a later reservation replaces the registry entry.
+const prehydrationTails = new WeakMap<PngImageCache, Map<string, Promise<void>>>();
+
+function reserveTails(cache: PngImageCache, references: readonly PlannedImageReference[]) {
+  let tails = prehydrationTails.get(cache);
+  if (!tails) {
+    tails = new Map();
+    prehydrationTails.set(cache, tails);
+  }
+  const keys = references.map((reference) => reference.sha256);
+  const predecessors = keys.flatMap((key) => {
+    const previous = tails.get(key);
+    return previous ? [previous] : [];
+  });
+  let finish!: () => void;
+  const tail = new Promise<void>((resolve) => { finish = resolve; });
+  // Reserve the whole plan synchronously before waiting on any predecessor.
+  for (const key of keys) tails.set(key, tail);
+  return {
+    predecessors,
+    release() {
+      finish();
+      for (const key of keys) {
+        if (tails.get(key) === tail) tails.delete(key);
+      }
+      if (tails.size === 0) prehydrationTails.delete(cache);
+    },
+  };
+}
+
 async function verifiedAsset(value: unknown, reference: PlannedImageReference): Promise<VerifiedDurablePngAsset> {
   if (value === null || typeof value !== "object") throw failure();
   const asset = value as VerifiedDurablePngAsset;
@@ -82,7 +113,7 @@ async function verifiedAsset(value: unknown, reference: PlannedImageReference): 
   return Object.freeze({ sha256, mimeType, byteLength, bytes });
 }
 
-/** Sequential P1: stage every reference before exposing any cache-backed workspace. */
+/** Stage each invocation independently before exposing any cache-backed workspace. */
 export async function prehydrateCanonicalReferences(
   plan: CanonicalReferencePlan,
   dependencies: CanonicalPrehydrationDependencies,
@@ -90,10 +121,15 @@ export async function prehydrateCanonicalReferences(
 ): Promise<CanonicalImageWorkspace> {
   const staged: CachedPngImage[] = [];
   const leases: PngImageLease[] = [];
+  let reservation: ReturnType<typeof reserveTails> | undefined;
   try {
     const snapshot = snapshotPlan(plan);
     if (typeof dependencies.rereadVerifiedPng !== "function" ||
       typeof dependencies.decodeVerifiedPng !== "function") throw failure();
+    if (snapshot.references.length > 0) {
+      reservation = reserveTails(cache, snapshot.references);
+      if (reservation.predecessors.length > 0) await Promise.all(reservation.predecessors);
+    }
     for (const reference of snapshot.references) {
       const verified = await verifiedAsset(await dependencies.rereadVerifiedPng(reference.sha256), reference);
       const result: unknown = await dependencies.decodeVerifiedPng(verified);
@@ -149,5 +185,7 @@ export async function prehydrateCanonicalReferences(
       try { cache.disposeCandidate(candidate); } catch { /* Continue rolling back. */ }
     }
     throw failure();
+  } finally {
+    reservation?.release();
   }
 }
