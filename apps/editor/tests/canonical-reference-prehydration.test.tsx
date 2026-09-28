@@ -54,6 +54,17 @@ function setup(overrides: {
 
 const failure = { message: "EDITOR_CANONICAL_PREHYDRATION_FAILED" };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resume) => { resolve = resume; });
+  return { promise, resolve };
+}
+
+const asset = (sha256: string) => ({
+  sha256, mimeType: "image/png", byteLength: 3,
+  bytes: (sha256 === hashA ? bytesA : bytesB).slice(),
+});
+
 describe("canonical reference prehydration", () => {
   it("publishes an empty immutable workspace without dependencies", async () => {
     const fixture = setup();
@@ -177,5 +188,117 @@ describe("canonical reference prehydration", () => {
     await expect(fixture.run(plan([hashA, hashB]))).rejects.toMatchObject(failure);
     expect(fixture.cache.resolveImage({ sha256: hashA, mimeType: "image/png", byteLength: 3, width: 20, height: 10 })).toBeNull();
     expect(fixture.handles.get(hashA)?.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("serializes the same cache/hash through publication without sharing a workspace", async () => {
+    const firstRead = deferred<ReturnType<typeof asset>>();
+    const fixture = setup({ rereadVerifiedPng: vi.fn()
+      .mockImplementationOnce(() => firstRead.promise)
+      .mockImplementation((sha256: string) => asset(sha256)) });
+    const first = fixture.run(plan([hashA]));
+    const second = fixture.run(plan([hashA]));
+    try {
+      expect(fixture.rereadVerifiedPng).toHaveBeenCalledTimes(1);
+    } finally {
+      firstRead.resolve(asset(hashA));
+    }
+    const one = await first;
+    const two = await second;
+    expect(fixture.rereadVerifiedPng).toHaveBeenCalledTimes(2);
+    expect(fixture.decodeVerifiedPng).toHaveBeenCalledTimes(2);
+    expect(two).not.toBe(one);
+    expect(two.images).not.toBe(one.images);
+    one.release();
+    expect(fixture.handles.get(hashA)?.close).not.toHaveBeenCalled();
+    two.release();
+    expect(fixture.handles.get(hashA)?.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("disposes each duplicate decoded candidate while preserving separate leases", async () => {
+    const handles = [{ close: vi.fn() }, { close: vi.fn() }];
+    let decoded = 0;
+    const blocked = deferred<ReturnType<typeof asset>>();
+    const fixture = setup({
+      rereadVerifiedPng: vi.fn().mockImplementationOnce(() => blocked.promise)
+        .mockImplementation((sha256: string) => asset(sha256)),
+      decodeVerifiedPng: vi.fn().mockImplementation((verified) => ({
+        ...verified, width: 20, height: 10, handle: handles[decoded++],
+      })),
+    });
+    const first = fixture.run(plan([hashA]));
+    const second = fixture.run(plan([hashA]));
+    blocked.resolve(asset(hashA));
+    const one = await first;
+    const two = await second;
+    expect(one.images[0]?.handle).toBe(two.images[0]?.handle);
+    expect(fixture.decodeVerifiedPng).toHaveBeenCalledTimes(2);
+    // The second decoded handle is not the cache's established handle.
+    expect(handles[1]?.close).toHaveBeenCalledTimes(1);
+    one.release();
+    expect(handles[0]?.close).not.toHaveBeenCalled();
+    two.release();
+    expect(handles[0]?.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets unrelated hashes in one cache and matching hashes in another cache progress", async () => {
+    const blocked = deferred<ReturnType<typeof asset>>();
+    const fixture = setup({ rereadVerifiedPng: (sha256) => sha256 === hashA ? blocked.promise : asset(sha256) });
+    const other = setup();
+    const first = fixture.run(plan([hashA]));
+    try {
+      const independent = await fixture.run(plan([hashB]));
+      const separateCache = await other.run(plan([hashA]));
+      expect(fixture.rereadVerifiedPng).toHaveBeenCalledTimes(2);
+      independent.release();
+      separateCache.release();
+    } finally {
+      blocked.resolve(asset(hashA));
+    }
+    (await first).release();
+  });
+
+  it("queues multi-hash requests without a lock-order deadlock", async () => {
+    const blocked = deferred<ReturnType<typeof asset>>();
+    const fixture = setup({ rereadVerifiedPng: vi.fn()
+      .mockImplementationOnce(() => blocked.promise)
+      .mockImplementation((sha256: string) => asset(sha256)) });
+    const first = fixture.run(plan([hashA, hashB]));
+    const second = fixture.run(plan([hashB, hashA]));
+    try {
+      expect(fixture.rereadVerifiedPng).toHaveBeenCalledTimes(1);
+    } finally {
+      blocked.resolve(asset(hashA));
+    }
+    const one = await first;
+    const two = await second;
+    expect(fixture.rereadVerifiedPng).toHaveBeenCalledTimes(4);
+    one.release();
+    two.release();
+  });
+
+  it("unblocks later reservations after failure without erasing a newer tail", async () => {
+    const firstRead = deferred<unknown>();
+    const secondRead = deferred<ReturnType<typeof asset>>();
+    const fixture = setup({ rereadVerifiedPng: vi.fn()
+      .mockImplementationOnce(() => firstRead.promise)
+      .mockImplementationOnce(() => secondRead.promise)
+      .mockImplementation((sha256: string) => asset(sha256)) });
+    const first = fixture.run(plan([hashA]));
+    const second = fixture.run(plan([hashA]));
+    const third = fixture.run(plan([hashA]));
+    firstRead.resolve(null);
+    await expect(first).rejects.toMatchObject(failure);
+    // The failed first caller must not remove the second caller's reservation.
+    await vi.waitFor(() => expect(fixture.rereadVerifiedPng).toHaveBeenCalledTimes(2));
+    try {
+      expect(fixture.rereadVerifiedPng).toHaveBeenCalledTimes(2);
+    } finally {
+      secondRead.resolve(asset(hashA));
+    }
+    const two = await second;
+    const three = await third;
+    expect(fixture.rereadVerifiedPng).toHaveBeenCalledTimes(3);
+    two.release();
+    three.release();
   });
 });
