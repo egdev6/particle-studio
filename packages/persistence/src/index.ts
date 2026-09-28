@@ -150,6 +150,14 @@ export interface PersistenceAdapterPort {
   ): Promise<void>;
 }
 
+export interface ConditionalCompleteRevisionWritePort extends PersistenceAdapterPort {
+  writeCompleteRevisionIfPointersMatch(
+    revision: CompleteSceneRevision,
+    expectedPointers: RevisionPointersSnapshot,
+    nextPointers: RevisionPointersSnapshot,
+  ): Promise<void>;
+}
+
 // SAFETY: Node 24 and supported browsers provide structuredClone.
 const clone = <T>(value: T): T =>
   (globalThis as unknown as { structuredClone(value: T): T }).structuredClone(

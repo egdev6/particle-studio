@@ -16,7 +16,7 @@ import {
   type AutosaveCandidate,
   type ContentAddressedAsset,
   type CompleteSceneRevision,
-  type PersistenceAdapterPort,
+  type ConditionalCompleteRevisionWritePort,
   type RecoveryOfferResult,
   type RevisionPointersSnapshot,
   type SavedRevisionPointer,
@@ -61,6 +61,7 @@ export type IndexedDbPersistenceErrorCode =
   | "PERSISTENCE_INDEXEDDB_QUOTA_EXCEEDED"
   | "PERSISTENCE_INDEXEDDB_WRITE_FAILED"
   | "PERSISTENCE_INDEXEDDB_POINTER_INCOMPLETE"
+  | "PERSISTENCE_INDEXEDDB_POINTER_CONFLICT"
   | "PERSISTENCE_INDEXEDDB_ASSET_MISSING"
   | "PERSISTENCE_INDEXEDDB_ASSET_UNREADABLE"
   | "PERSISTENCE_INDEXEDDB_ASSET_HASH_MISMATCH"
@@ -343,6 +344,20 @@ async function storedPointerIsComplete(
   return revision !== null && sameRevision(pointer, revision);
 }
 
+function samePointer(
+  left: SavedRevisionPointer | DraftRevisionPointer | null,
+  right: SavedRevisionPointer | DraftRevisionPointer | null,
+): boolean {
+  return left === null || right === null
+    ? left === right
+    : left.kind === right.kind &&
+        left.documentId === right.documentId &&
+        left.revisionId === right.revisionId &&
+        left.sequence === right.sequence &&
+        (left.kind !== "draft" ||
+          left.parentApprovalHash === (right as DraftRevisionPointer).parentApprovalHash);
+}
+
 function compareNewestRevision(
   left: CompleteSceneRevision,
   right: CompleteSceneRevision,
@@ -484,7 +499,7 @@ export function createIndexedDbPersistenceAdapter(input: {
   readonly databaseName: string;
   readonly injectAssetWriteFailure?: () => void;
   readonly injectPointerPublicationFailure?: () => void;
-}): PersistenceAdapterPort &
+}): ConditionalCompleteRevisionWritePort &
   IndexedDbAutosaveStorage &
   IndexedDbApprovalStorage &
   AssetPersistencePort {
@@ -721,6 +736,46 @@ export function createIndexedDbPersistenceAdapter(input: {
             ? "PERSISTENCE_INDEXEDDB_QUOTA_EXCEEDED"
             : "PERSISTENCE_INDEXEDDB_WRITE_FAILED",
         );
+      }
+    },
+
+    async writeCompleteRevisionIfPointersMatch(revision, expectedPointers, nextPointers) {
+      try {
+        const complete = copyRevision(revision);
+        const expected = createRevisionPointersSnapshot(expectedPointers);
+        const next = createRevisionPointersSnapshot(nextPointers);
+        await database.transaction("rw", database.revisions, database.pointers, async () => {
+          const record = await database.pointers.get(complete.documentId);
+          const current = record === undefined ? createRevisionPointersSnapshot({ saved: null, draft: null }) : pointerSnapshot(record);
+          if (current === null || (record !== undefined && record.documentId !== complete.documentId)) {
+            throw new IndexedDbPersistenceError("PERSISTENCE_INDEXEDDB_POINTER_INCOMPLETE");
+          }
+          const currentComplete = await Promise.all([current.saved, current.draft].map(
+            (pointer) => storedPointerIsComplete(database.revisions, complete.documentId, pointer),
+          ));
+          if (!currentComplete.every(Boolean)) {
+            throw new IndexedDbPersistenceError("PERSISTENCE_INDEXEDDB_POINTER_INCOMPLETE");
+          }
+          if (!samePointer(current.saved, expected.saved) || !samePointer(current.draft, expected.draft)) {
+            throw new IndexedDbPersistenceError("PERSISTENCE_INDEXEDDB_POINTER_CONFLICT");
+          }
+          const validPointers = await Promise.all([next.saved, next.draft].map(
+            async (pointer) => currentPointerIsComplete(pointer, complete) ||
+              storedPointerIsComplete(database.revisions, complete.documentId, pointer),
+          ));
+          if (!validPointers.every(Boolean)) {
+            throw new IndexedDbPersistenceError("PERSISTENCE_INDEXEDDB_POINTER_INCOMPLETE");
+          }
+          // Conditional writes must never replace an existing immutable revision.
+          await database.revisions.add(storeRevision(complete));
+          input.injectPointerPublicationFailure?.();
+          await database.pointers.put({ documentId: complete.documentId, ...next });
+        });
+      } catch (error) {
+        if (error instanceof IndexedDbPersistenceError) throw error;
+        throw new IndexedDbPersistenceError(isQuotaExceededError(error)
+          ? "PERSISTENCE_INDEXEDDB_QUOTA_EXCEEDED"
+          : "PERSISTENCE_INDEXEDDB_WRITE_FAILED");
       }
     },
 

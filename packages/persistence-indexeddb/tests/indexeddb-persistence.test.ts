@@ -682,6 +682,112 @@ describe("IndexedDB approval persistence", () => {
   });
 });
 
+describe("IndexedDB conditional complete revision write", () => {
+  it.each(["saved", "draft", "cross-document draft"] as const)(
+    "rejects a matching snapshot with an incomplete current %s pointer without publishing",
+    async (broken) => {
+      const adapter = createIndexedDbPersistenceAdapter({ databaseName });
+      const saved = revision("saved-1", 1);
+      const draft = revision("draft-2", 2);
+      await adapter.writeCompleteRevision(saved, createRevisionPointersSnapshot({
+        saved: createSavedRevisionPointer(saved), draft: null,
+      }));
+      const initial = createRevisionPointersSnapshot({
+        saved: createSavedRevisionPointer(saved),
+        draft: createDraftRevisionPointer(draft),
+      });
+      await adapter.writeCompleteRevision(draft, initial);
+
+      const database = new Dexie(databaseName);
+      database.version(1).stores({
+        revisions: "[documentId+revisionId], documentId",
+        pointers: "documentId",
+      });
+      if (broken === "cross-document draft") {
+        const foreign = revision("foreign-1", 1, "document-2");
+        await adapter.writeCompleteRevision(foreign, createRevisionPointersSnapshot({
+          saved: createSavedRevisionPointer(foreign), draft: null,
+        }));
+        await database.table("pointers").update("document-1", {
+          draft: createDraftRevisionPointer(foreign),
+        });
+      } else {
+        await database.table("revisions").delete(["document-1", broken === "saved" ? saved.revisionId : draft.revisionId]);
+      }
+      const corrupted = await database.table("pointers").get("document-1");
+      const expected = createRevisionPointersSnapshot(corrupted);
+      const candidate = revision("candidate-3", 3);
+      await expect(adapter.readPointers("document-1")).rejects.toMatchObject({
+        code: "PERSISTENCE_INDEXEDDB_POINTER_INCOMPLETE",
+      });
+      await expect(adapter.writeCompleteRevisionIfPointersMatch(candidate, expected, createRevisionPointersSnapshot({
+        saved: createSavedRevisionPointer(candidate), draft: null,
+      }))).rejects.toMatchObject({ code: "PERSISTENCE_INDEXEDDB_POINTER_INCOMPLETE" });
+      expect(await adapter.readRevision("document-1", candidate.revisionId)).toBeNull();
+      expect(await database.table("pointers").get("document-1")).toEqual(corrupted);
+      database.close();
+    },
+  );
+  it("rejects stale saved and draft expectations without inserting a revision", async () => {
+    const adapter = createIndexedDbPersistenceAdapter({ databaseName });
+    const saved = revision("saved-1", 1);
+    const draft = revision("draft-2", 2);
+    const current = createRevisionPointersSnapshot({
+      saved: createSavedRevisionPointer(saved),
+      draft: createDraftRevisionPointer(draft, `sha256:${"a".repeat(64)}`),
+    });
+    await adapter.writeCompleteRevision(saved, createRevisionPointersSnapshot({ saved: current.saved, draft: null }));
+    await adapter.writeCompleteRevision(draft, current);
+    for (const [index, expected] of [
+      createRevisionPointersSnapshot({ saved: null, draft: current.draft }),
+      createRevisionPointersSnapshot({ saved: current.saved, draft: createDraftRevisionPointer(draft) }),
+    ].entries()) {
+      const candidate = revision(`rejected-${index}`, 3);
+      await expect(adapter.writeCompleteRevisionIfPointersMatch(candidate, expected, createRevisionPointersSnapshot({ saved: current.saved, draft: createDraftRevisionPointer(candidate) }))).rejects.toMatchObject({ code: "PERSISTENCE_INDEXEDDB_POINTER_CONFLICT" });
+      expect(await adapter.readRevision("document-1", candidate.revisionId)).toBeNull();
+      expect(await adapter.readPointers("document-1")).toEqual(current);
+    }
+  });
+
+  it("rejects an interleaved writer and rolls back a failed pointer publication", async () => {
+    const first = createIndexedDbPersistenceAdapter({ databaseName });
+    const second = createIndexedDbPersistenceAdapter({ databaseName });
+    const empty = createRevisionPointersSnapshot({ saved: null, draft: null });
+    const winner = revision("winner", 1);
+    const published = createRevisionPointersSnapshot({ saved: createSavedRevisionPointer(winner), draft: null });
+    await first.writeCompleteRevisionIfPointersMatch(winner, empty, published);
+    const loser = revision("loser", 2);
+    await expect(second.writeCompleteRevisionIfPointersMatch(loser, empty, createRevisionPointersSnapshot({ saved: published.saved, draft: createDraftRevisionPointer(loser) }))).rejects.toMatchObject({ code: "PERSISTENCE_INDEXEDDB_POINTER_CONFLICT" });
+    expect(await first.readRevision("document-1", "loser")).toBeNull();
+    const failing = createIndexedDbPersistenceAdapter({ databaseName, injectPointerPublicationFailure() { throw new Error("failure"); } });
+    await expect(failing.writeCompleteRevisionIfPointersMatch(loser, published, createRevisionPointersSnapshot({ saved: published.saved, draft: createDraftRevisionPointer(loser) }))).rejects.toMatchObject({ code: "PERSISTENCE_INDEXEDDB_WRITE_FAILED" });
+    expect(await first.readRevision("document-1", "loser")).toBeNull();
+    expect(await first.readPointers("document-1")).toEqual(published);
+  });
+
+  it("rejects incomplete next pointers and an existing revision identity without modifying either", async () => {
+    const adapter = createIndexedDbPersistenceAdapter({ databaseName });
+    const empty = createRevisionPointersSnapshot({ saved: null, draft: null });
+    const candidate = revision("candidate", 1);
+    const missing = revision("missing", 2);
+    await expect(adapter.writeCompleteRevisionIfPointersMatch(candidate, empty, createRevisionPointersSnapshot({ saved: createSavedRevisionPointer(missing), draft: null }))).rejects.toMatchObject({ code: "PERSISTENCE_INDEXEDDB_POINTER_INCOMPLETE" });
+    expect(await adapter.readRevision("document-1", "candidate")).toBeNull();
+    await adapter.writeCompleteRevision(candidate, empty);
+    await expect(adapter.writeCompleteRevisionIfPointersMatch(candidate, empty, createRevisionPointersSnapshot({ saved: createSavedRevisionPointer(candidate), draft: null }))).rejects.toMatchObject({ code: "PERSISTENCE_INDEXEDDB_WRITE_FAILED" });
+    expect(await adapter.readPointers("document-1")).toEqual(empty);
+  });
+
+  it("publishes a complete revision when both pointers match, including an initially empty snapshot", async () => {
+    const adapter = createIndexedDbPersistenceAdapter({ databaseName });
+    const saved = revision("saved-1", 1);
+    const empty = createRevisionPointersSnapshot({ saved: null, draft: null });
+    const next = createRevisionPointersSnapshot({ saved: createSavedRevisionPointer(saved), draft: createDraftRevisionPointer(saved) });
+    await adapter.writeCompleteRevisionIfPointersMatch(saved, empty, next);
+    expect(await adapter.readRevision("document-1", "saved-1")).toEqual(saved);
+    expect(await adapter.readPointers("document-1")).toEqual(next);
+  });
+});
+
 describe("IndexedDB persistence adapter", () => {
   it("publishes separate saved and draft pointers only for complete revisions", async () => {
     const adapter = createIndexedDbPersistenceAdapter({ databaseName });
