@@ -253,6 +253,8 @@ function requireSequence(value: unknown): number {
   return value;
 }
 
+const issuedCompleteRevisions = new WeakSet<object>();
+
 class StoredCompleteSceneRevision implements CompleteSceneRevision {
   readonly canonicalization: CompleteSceneRevision["canonicalization"];
   readonly #document: SceneDocumentV1;
@@ -272,6 +274,21 @@ class StoredCompleteSceneRevision implements CompleteSceneRevision {
       byteLength: this.#canonicalBytes.byteLength,
     });
     Object.freeze(this);
+    issuedCompleteRevisions.add(this);
+  }
+
+  static snapshot(value: StoredCompleteSceneRevision): CompleteSceneRevision {
+    return {
+      documentId: value.documentId,
+      revisionId: value.revisionId,
+      sequence: value.sequence,
+      document: freezeDeep(clone(value.#document)),
+      canonicalization: {
+        identifier: value.canonicalization.identifier,
+        byteLength: value.canonicalization.byteLength,
+      },
+      canonicalBytes: Uint8Array.prototype.slice.call(value.#canonicalBytes),
+    };
   }
 
   get document(): SceneDocumentV1 {
@@ -281,6 +298,15 @@ class StoredCompleteSceneRevision implements CompleteSceneRevision {
   get canonicalBytes(): Uint8Array {
     return this.#canonicalBytes.slice();
   }
+}
+
+/** Export only persistence-issued revisions as own-data snapshots; do not validate schema or parity. */
+const snapshotStoredRevision = StoredCompleteSceneRevision.snapshot;
+
+export function snapshotIssuedCompleteRevision(value: unknown): CompleteSceneRevision | null {
+  if (value === null || typeof value !== "object" || !issuedCompleteRevisions.has(value)) return null;
+  // Static snapshot reads private fields directly, never mutable prototype accessors.
+  return snapshotStoredRevision(value as StoredCompleteSceneRevision);
 }
 
 export function createCompleteRevision(input: {
