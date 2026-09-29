@@ -1,10 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
+import { FIRST_SLICE_DOCUMENT } from "@particle-studio/scene-document";
+import { createCompleteRevision } from "@particle-studio/persistence";
 
 import {
   EditorImportControls,
   type EditorImportRequest,
 } from "../src/editor-import-controls.js";
+import { createEditorImportWorkflow } from "../src/editor-import-workflow.js";
+import type {
+  DurableDraftPublication, DurableDraftPublishInput,
+} from "../src/durable-draft-workspace.js";
 
 const IMAGE_ERROR = "Image import failed. Check the PNG file, then try again.";
 const JSON_ERROR = "Editable JSON import failed. Check the JSON, then try again.";
@@ -193,6 +199,61 @@ describe("editor import controls", () => {
     await waitFor(() => expect(view.getByRole("status").textContent).toBe("Import complete."));
     expect(view.workflow).toHaveBeenCalledTimes(1);
     expect(view.workflow).toHaveBeenCalledWith({ kind: "image-import", file: expect.any(File) });
+  });
+
+  it("publishes entered JSON through the real workflow adapter and retries with fresh text", async () => {
+    // Minimal frozen publication so the fake publish port keeps the genuine contract.
+    const fakePublication = (): DurableDraftPublication => Object.freeze({
+      revision: createCompleteRevision({
+        documentId: "doc-ui", revisionId: "fake-ui", sequence: 0,
+        document: FIRST_SLICE_DOCUMENT,
+      }),
+      workspace: Object.freeze({
+        plan: Object.freeze({
+          document: FIRST_SLICE_DOCUMENT,
+          canonicalEditableJson: JSON.stringify(FIRST_SLICE_DOCUMENT),
+          references: Object.freeze([]),
+        }),
+        images: Object.freeze([]),
+        release() {},
+      }),
+      release() {},
+    });
+    const captured: DurableDraftPublishInput[] = [];
+    let attempts = 0;
+    const publish = vi.fn(async (input: DurableDraftPublishInput) => {
+      captured.push(input);
+      attempts += 1;
+      if (attempts === 1) throw new Error("EDITOR_DURABLE_DRAFT_WRITE_FAILED");
+      return fakePublication();
+    });
+    const revisionId = () => `draft-${attempts}`;
+    const createdAt = () => 42;
+    const imageWorkflow = vi.fn(async () => "ignored");
+    // REAL new adapter wired into the controls with an injected fake publish.
+    const workflow = createEditorImportWorkflow({
+      workspace: { publish },
+      imageWorkflow,
+      documentId: "doc-ui",
+      revisionId,
+      sequence: () => attempts + 1,
+      createdAt,
+    });
+    const view = renderControls(workflow);
+    view.typeEditableJson("broken");
+    view.importEditableJson();
+    await waitFor(() => expect(view.getByRole("alert").textContent).toBe(JSON_ERROR));
+    view.typeEditableJson('{"fixed":true}');
+    view.importEditableJson();
+    await waitFor(() => expect(view.getByRole("status").textContent).toBe("Import complete."));
+    expect(publish).toHaveBeenCalledTimes(2);
+    // Each attempt carries the entered text, the injected document, and the
+    // exact forwarded identity/createdAt callbacks with a fresh sequence value.
+    expect(captured[0]).toMatchObject({ documentId: "doc-ui", editableJson: "broken", sequence: 1 });
+    expect(captured[1]).toMatchObject({ documentId: "doc-ui", editableJson: '{"fixed":true}', sequence: 2 });
+    expect(captured[0]!.revisionId).toBe(revisionId);
+    expect(captured[0]!.createdAt).toBe(createdAt);
+    expect(imageWorkflow).not.toHaveBeenCalled();
   });
 
   it("gives each mounted instance its own label associations and input ids", () => {
