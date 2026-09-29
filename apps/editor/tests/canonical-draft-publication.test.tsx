@@ -123,6 +123,31 @@ describe("first canonical draft publication", () => {
     publication.release();
   });
 
+  it("forwards captured cachePorts as prehydration ports while cache stays the coordination identity", async () => {
+    const f = fixture();
+    const cache = f.options.cache;
+    const cachePorts = {
+      adoptStaged: cache.adoptStaged.bind(cache),
+      resolveImage: cache.resolveImage.bind(cache),
+      disposeCandidate: cache.disposeCandidate.bind(cache),
+    };
+    let finishRead!: (pointers: typeof f.pointers) => void;
+    vi.mocked(f.adapter.readPointers).mockImplementationOnce(() =>
+      new Promise((resolve) => { finishRead = resolve; }));
+    const pending = publishFirstCanonicalDraft({ ...f.options, cachePorts });
+    expect(f.adapter.readPointers).toHaveBeenCalledWith("doc-1");
+    // Same-object method replacement after the options were captured cannot
+    // reach this invocation: the pre-captured ports keep serving hydration.
+    const genuineAdopt = cache.adoptStaged;
+    cache.adoptStaged = () => { throw new Error("mutated cache used"); };
+    finishRead(f.pointers);
+    const publication = await pending;
+    expect(publication.workspace.images).toHaveLength(1);
+    cache.adoptStaged = genuineAdopt;
+    publication.release();
+    expect(f.handle.close).toHaveBeenCalledTimes(1);
+  });
+
   it("retains both prehydration callbacks when their object is mutated during a pending pointer read", async () => {
     const f = fixture();
     let finishRead!: (pointers: typeof f.pointers) => void;

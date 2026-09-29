@@ -1,5 +1,5 @@
 import "fake-indexeddb/auto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FIRST_SLICE_DOCUMENT } from "@particle-studio/scene-document";
 import {
   createCompleteRevision, createDraftRevisionPointer, createRevisionPointersSnapshot,
@@ -9,6 +9,10 @@ import {
 } from "@particle-studio/persistence-indexeddb";
 import { createPngImageCache } from "../src/png-image-cache.js";
 import { createDurableDraftWorkspace } from "../src/durable-draft-workspace.js";
+import type {
+  DurableDraftPublishInput, DurableDraftPublication,
+  DurableDraftWriteWorkspaceDependencies, DurableDraftWorkspaceDependencies,
+} from "../src/durable-draft-workspace.js";
 import { prehydrateCanonicalReferences } from "../src/canonical-reference-prehydration.js";
 
 const hashA = "sha256:039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81";
@@ -82,6 +86,11 @@ function fixture() {
     seedDraft,
   };
 }
+
+const publishInput = (revisionId: string, sequence: number, sha256: string) => ({
+  documentId: "doc-1", editableJson: JSON.stringify(imageDocument(sha256)),
+  revisionId: () => revisionId, sequence, createdAt: () => 1234,
+});
 
 afterEach(async () => {
   while (databases.length > 0) {
@@ -346,5 +355,249 @@ describe("durable draft workspace (actual persistence-indexeddb adapter)", () =>
     loaded.release();
     expect(f.workspace.current).toBeNull();
     expect(f.closed).toEqual([f.handles[0], f.handles[1]]);
+  });
+
+  it("publishes, reloads, and republishes through real adapter state, sharing handle lifetime", async () => {
+    const f = fixture();
+    await f.adapter.writeAsset({ mimeType: "image/png", bytes: bytesA });
+    const published = await f.workspace.publish(publishInput("draft-1", 1, hashA));
+    expect(f.workspace.current).toBe(published);
+    expect(published.revision).toMatchObject({ documentId: "doc-1", revisionId: "draft-1", sequence: 1 });
+    expect(published.workspace.images[0]!.sha256).toBe(hashA);
+    expect((await f.adapter.readPointers("doc-1")).draft)
+      .toMatchObject({ revisionId: "draft-1", sequence: 1 });
+    // A later reload replaces the published prior and releases its lease.
+    await f.seedDraft("rev-2", 2, hashB, bytesB, approvalHash);
+    const reloaded = await f.workspace.reload({ documentId: "doc-1" });
+    expect(reloaded.revision.revisionId).toBe("rev-2");
+    expect(f.workspace.current).toBe(reloaded);
+    expect(f.closed).toEqual([f.handles[0]]);
+    // Republishing through the same workspace replaces the reload prior: the
+    // seeded approval linkage carries forward and the duplicate decode of the
+    // established image is discarded while the shared handle stays open.
+    await f.adapter.writeAsset({ mimeType: "image/png", bytes: bytesB });
+    const republished = await f.workspace.publish(publishInput("draft-3", 3, hashB));
+    expect(f.workspace.current).toBe(republished);
+    expect(republished.revision.revisionId).toBe("draft-3");
+    expect((await f.adapter.readPointers("doc-1")).draft)
+      .toMatchObject({ revisionId: "draft-3", sequence: 3, parentApprovalHash: approvalHash });
+    expect(f.closed).toEqual([f.handles[0], f.handles[2]]);
+    expect(republished.workspace.images[0]!.handle).toBe(reloaded.workspace.images[0]!.handle);
+  });
+
+  it("carries approval linkage through multiple publish replacements", async () => {
+    const f = fixture();
+    await f.seedDraft("rev-1", 1, hashA, bytesA, approvalHash);
+    await f.workspace.reload({ documentId: "doc-1" });
+    const first = await f.workspace.publish(publishInput("draft-2", 2, hashA));
+    expect((await f.adapter.readPointers("doc-1")).draft)
+      .toMatchObject({ revisionId: "draft-2", parentApprovalHash: approvalHash });
+    const second = await f.workspace.publish(publishInput("draft-3", 3, hashA));
+    expect(f.workspace.current).toBe(second);
+    expect((await f.adapter.readPointers("doc-1")).draft)
+      .toMatchObject({ revisionId: "draft-3", parentApprovalHash: approvalHash });
+    // Each replacement discarded its duplicate decode; the superseded releases
+    // decrement shared lease counts, so the established handle stays open.
+    expect(f.closed).toEqual([f.handles[1], f.handles[2]]);
+    second.release();
+    expect(f.closed).toHaveLength(f.handles.length);
+    expect(f.handles.every((closedHandle) => f.closed.includes(closedHandle))).toBe(true);
+    first.release();
+    expect(f.closed).toHaveLength(f.handles.length);
+  });
+
+  it("returns the same facade for an exact retry without decoding or writing", async () => {
+    const f = fixture();
+    await f.adapter.writeAsset({ mimeType: "image/png", bytes: bytesA });
+    let writes = 0;
+    const genuineWrite = f.deps.persistence.writeCompleteRevisionIfPointersMatch
+      .bind(f.deps.persistence);
+    f.deps.persistence.writeCompleteRevisionIfPointersMatch =
+      async (...args: Parameters<typeof genuineWrite>) => {
+        writes += 1;
+        return genuineWrite(...args);
+      };
+    const published = await f.workspace.publish(publishInput("draft-1", 1, hashA));
+    expect(writes).toBe(1);
+    const retry = await f.workspace.publish(publishInput("draft-1", 1, hashA));
+    expect(retry).toBe(published);
+    expect(f.workspace.current).toBe(published);
+    expect(writes).toBe(1);
+    expect(f.log.filter((entry) => entry.startsWith("decode:"))).toHaveLength(1);
+    published.release();
+    expect(f.workspace.current).toBeNull();
+  });
+
+  it("preserves the previous publication when decoding or CAS fails, closing only new resources", async () => {
+    const f = fixture();
+    await f.adapter.writeAsset({ mimeType: "image/png", bytes: bytesA });
+    const published = await f.workspace.publish(publishInput("draft-1", 1, hashA));
+    const [publishedHandle] = f.handles;
+    // A controlled decode failure leaves the previous publication and its lease intact.
+    await f.adapter.writeAsset({ mimeType: "image/png", bytes: bytesB });
+    f.failDecode(hashB);
+    await expect(f.workspace.publish(publishInput("draft-2", 2, hashB)))
+      .rejects.toThrow("EDITOR_CANONICAL_PREHYDRATION_FAILED");
+    expect(f.workspace.current).toBe(published);
+    expect(f.closed).toEqual([]);
+    f.failDecode(null);
+    // A CAS race fails the conditional write: only the new attempt's handle closes.
+    let releaseGate!: () => void;
+    f.gate(new Promise<void>((resolve) => { releaseGate = resolve; }));
+    const pending = f.workspace.publish(publishInput("draft-2", 2, hashB));
+    await f.seedDraft("rival", 9, hashA, bytesA);
+    releaseGate();
+    await expect(pending).rejects.toThrow("EDITOR_CANONICAL_DRAFT_WRITE_FAILED");
+    expect(f.workspace.current).toBe(published);
+    expect(f.closed).toEqual([f.handles[1]]);
+    expect(f.closed).not.toContain(publishedHandle);
+    published.release();
+    expect(f.closed).toHaveLength(f.handles.length);
+    expect(f.handles.every((closedHandle) => f.closed.includes(closedHandle))).toBe(true);
+  });
+
+  it("serializes reloads and publishes through one queue and recovers from a failed attempt", async () => {
+    const f = fixture();
+    await f.adapter.writeAsset({ mimeType: "image/png", bytes: bytesA });
+    await f.workspace.publish(publishInput("draft-1", 1, hashA));
+    let releaseGate!: () => void;
+    f.gate(new Promise<void>((resolve) => { releaseGate = resolve; }));
+    const reloading = f.workspace.reload({ documentId: "doc-1" });
+    const publishing = f.workspace.publish(publishInput("draft-2", 2, hashA));
+    // The blocked reload parks the whole queue: no publish work has started.
+    expect(f.log.filter((entry) => entry.startsWith("decode:"))).toHaveLength(1);
+    releaseGate();
+    const reloaded = await reloading;
+    const republished = await publishing;
+    expect(reloaded.revision.revisionId).toBe("draft-1");
+    expect(republished.revision.revisionId).toBe("draft-2");
+    // Strict order proves one shared queue: initial, reload, then publish.
+    expect(f.log.slice(0, 6)).toEqual([
+      `reread:${hashA}`, `decode:${hashA}`,
+      `reread:${hashA}`, `decode:${hashA}`,
+      `reread:${hashA}`, `decode:${hashA}`,
+    ]);
+    expect(f.workspace.current).toBe(republished);
+    // A failed attempt does not poison the queue: the next attempt still runs.
+    await expect(f.workspace.publish({ ...publishInput("draft-3", 3, hashA), editableJson: "{" }))
+      .rejects.toThrow("SCENE_DOCUMENT_IMPORT_INVALID_JSON");
+    const recovered = await f.workspace.reload({ documentId: "doc-1" });
+    expect(recovered.revision.revisionId).toBe("draft-2");
+    expect(f.workspace.current).toBe(recovered);
+    expect(f.log).toHaveLength(8);
+  });
+
+  it("publishes a committed replacement when current is released during a pending write", async () => {
+    const f = fixture();
+    await f.adapter.writeAsset({ mimeType: "image/png", bytes: bytesA });
+    const initial = await f.workspace.publish(publishInput("draft-1", 1, hashA));
+    await f.adapter.writeAsset({ mimeType: "image/png", bytes: bytesB });
+    let finishWrite!: () => void;
+    const genuineWrite = f.deps.persistence.writeCompleteRevisionIfPointersMatch
+      .bind(f.deps.persistence);
+    f.deps.persistence.writeCompleteRevisionIfPointersMatch =
+      async (...args: Parameters<typeof genuineWrite>) => {
+        await new Promise<void>((resolve) => { finishWrite = resolve; });
+        return genuineWrite(...args);
+      };
+    const publishing = f.workspace.publish(publishInput("draft-2", 2, hashB));
+    await vi.waitFor(() => expect(finishWrite).toBeDefined());
+    // Releasing current during the pending write is never cancellation: the
+    // committed replacement still publishes and becomes current.
+    initial.release();
+    expect(f.workspace.current).toBeNull();
+    expect(f.closed).toEqual([f.handles[0]]);
+    finishWrite();
+    const published = await publishing;
+    expect(published.revision.revisionId).toBe("draft-2");
+    expect(f.workspace.current).toBe(published);
+    expect(f.closed).toEqual([f.handles[0]]);
+    published.release();
+    expect(f.closed).toEqual(f.handles);
+  });
+
+  it("keeps pre-queued snapshots of publish inputs and methods, recapturing for later calls", async () => {
+    const f = fixture();
+    await f.adapter.writeAsset({ mimeType: "image/png", bytes: bytesA });
+    let releaseGate!: () => void;
+    f.gate(new Promise<void>((resolve) => { releaseGate = resolve; }));
+    const input = { ...publishInput("draft-1", 1, hashA) };
+    const genuineReread = f.deps.prehydration.rereadVerifiedPng;
+    const pending = f.workspace.publish(input);
+    // Same-object mutations after queueing cannot reach the pending attempt.
+    input.documentId = "doc-2";
+    input.editableJson = JSON.stringify(imageDocument(hashB));
+    input.revisionId = () => "redirected";
+    input.sequence = 99;
+    input.createdAt = () => 999;
+    f.deps.prehydration.rereadVerifiedPng = async () => { throw new Error("mutated reread used"); };
+    const genuineReadPointers = f.deps.persistence.readPointers;
+    f.deps.persistence.readPointers = async () => { throw new Error("mutated read used"); };
+    const genuineAdopt = f.deps.cache.adoptStaged;
+    f.deps.cache.adoptStaged = () => { throw new Error("mutated cache used"); };
+    releaseGate();
+    const published = await pending;
+    expect(published.revision).toMatchObject({ documentId: "doc-1", revisionId: "draft-1", sequence: 1 });
+    expect(published.workspace.images[0]!.sha256).toBe(hashA);
+    // Later invocations capture their then-current methods (no forever binding).
+    f.deps.prehydration.rereadVerifiedPng = genuineReread;
+    f.deps.persistence.readPointers = genuineReadPointers;
+    f.deps.cache.adoptStaged = genuineAdopt;
+    let rereads = 0;
+    const restoredReread = f.deps.prehydration.rereadVerifiedPng;
+    f.deps.prehydration.rereadVerifiedPng = async (sha256: string) => {
+      rereads += 1;
+      return restoredReread(sha256);
+    };
+    const again = await f.workspace.publish({ ...publishInput("draft-2", 2, hashA) });
+    expect(again.revision.revisionId).toBe("draft-2");
+    expect(rereads).toBe(1);
+  });
+
+  it("keeps read-only dependency consumers and readonly publish input types compatible", () => {
+    const f = fixture();
+    const readOnly: DurableDraftWorkspaceDependencies = {
+      persistence: f.deps.persistence,
+      prehydration: f.deps.prehydration,
+      cache: f.deps.cache,
+    };
+    const readWorkspace = createDurableDraftWorkspace(readOnly);
+    expect(readWorkspace.current).toBeNull();
+    const writeDeps: DurableDraftWriteWorkspaceDependencies = f.deps;
+    expect(writeDeps.persistence.readPointers).toBeTypeOf("function");
+    const input: Readonly<DurableDraftPublishInput> = {
+      documentId: "doc-1", editableJson: "{}", revisionId: () => "draft-x",
+      sequence: 1, createdAt: () => 0,
+    };
+    expect(input.documentId).toBe("doc-1");
+    const publish: (options: DurableDraftPublishInput) => Promise<DurableDraftPublication> =
+      f.workspace.publish;
+    expect(typeof publish).toBe("function");
+  });
+
+  it.each(["prototype", "non-enumerable"] as const)(
+    "publishes %s-declared input fields that a spread would drop", async (kind) => {
+      const f = fixture();
+      await f.adapter.writeAsset({ mimeType: "image/png", bytes: bytesA });
+      const values = publishInput("draft-1", 1, hashA) as Record<string, unknown>;
+      const input = {} as DurableDraftPublishInput;
+      if (kind === "prototype") Object.setPrototypeOf(input, values);
+      else {
+        for (const [key, value] of Object.entries(values)) {
+          Object.defineProperty(input, key, { value, configurable: true });
+        }
+      }
+      const published = await f.workspace.publish(input);
+      expect(published.revision).toMatchObject({
+        documentId: "doc-1", revisionId: "draft-1", sequence: 1 });
+      expect(published.workspace.images[0]!.sha256).toBe(hashA);
+    },
+  );
+
+  it("sanitizes a throwing prototype getter before the publish attempt queues", async () => {
+    const f = fixture();
+    const throwing = { get documentId() { throw new Error("getter failed"); } };
+    const input = Object.create(throwing) as DurableDraftPublishInput;
+    await expect(f.workspace.publish(input)).rejects.toThrow("EDITOR_DURABLE_DRAFT_WORKSPACE_FAILED");
   });
 });

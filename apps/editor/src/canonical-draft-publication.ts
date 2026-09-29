@@ -5,7 +5,8 @@ import {
 import { createCanonicalReferencePlan } from "./canonical-reference-plan.js";
 import {
   prehydrateCanonicalReferences,
-  type CanonicalPrehydrationDependencies, type CanonicalImageWorkspace,
+  type CanonicalImageWorkspace, type CanonicalPrehydrationCachePorts,
+  type CanonicalPrehydrationDependencies,
 } from "./canonical-reference-prehydration.js";
 import type { PngImageCache } from "./png-image-cache.js";
 import {
@@ -22,6 +23,12 @@ export interface FirstCanonicalDraftOptions {
   readonly persistence: ConditionalCompleteRevisionWritePort;
   readonly prehydration: CanonicalPrehydrationDependencies;
   readonly cache: PngImageCache;
+  /**
+   * Optional pre-captured cache operations forwarded as prehydration's fourth
+   * argument; `cache` above remains the third, tail-coordination identity
+   * argument. When omitted, hydration uses the cache's current methods.
+   */
+  readonly cachePorts?: CanonicalPrehydrationCachePorts;
   /** Live publication whose draft pointer this invocation intends to replace (or retry). */
   readonly priorPublication?: FirstCanonicalDraftPublication;
 }
@@ -63,7 +70,7 @@ export async function publishFirstCanonicalDraft(
   options: LivePriorDraftOptions,
 ): Promise<FirstCanonicalDraftPublication | CanonicalDraftReloadPublication> {
   const { editableJson, documentId, revisionId: createRevisionId, sequence,
-    createdAt: createTimestamp, persistence, prehydration, cache,
+    createdAt: createTimestamp, persistence, prehydration, cache, cachePorts,
     priorPublication } = options;
   let conditionalWrite: ConditionalCompleteRevisionWritePort["writeCompleteRevisionIfPointersMatch"];
   let stablePrehydration: CanonicalPrehydrationDependencies;
@@ -157,7 +164,7 @@ export async function publishFirstCanonicalDraft(
     throw new Error("EDITOR_CANONICAL_DRAFT_IDENTITY_FAILED");
   }
 
-  const workspace = await prehydrateCanonicalReferences(plan.value, stablePrehydration, cache);
+  const workspace = await prehydrateCanonicalReferences(plan.value, stablePrehydration, cache, cachePorts);
   if (priorPublication && !isLivePublication(priorPublication)) {
     reloadAuthority = refreshReloadAuthority();
     if (reloadAuthority === null) {
