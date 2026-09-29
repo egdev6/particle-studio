@@ -1,4 +1,6 @@
-import type { CompleteSceneRevision } from "@particle-studio/persistence";
+import type {
+  CompleteSceneRevision, DraftRevisionPointer, SavedRevisionPointer,
+} from "@particle-studio/persistence";
 import { readCanonicalDraftContentParity } from "./canonical-draft-content-parity.js";
 import {
   prehydrateCanonicalReferences,
@@ -47,6 +49,82 @@ const failure = () => new Error("EDITOR_CANONICAL_DRAFT_RELOAD_FAILED");
 // Ownership is process-local: a publication's release authority lives in this set.
 const owned = new WeakSet<CanonicalDraftReloadPublication>();
 
+export interface LiveReloadDraftAuthority {
+  /** Full pointer snapshot captured from the same read that fixed the identity. */
+  readonly saved: SavedRevisionPointer | null;
+  readonly draft: DraftRevisionPointer;
+}
+
+const approvalHashPattern = /^sha256:[a-f0-9]{64}$/;
+
+// Republish authority is minted only by the reload service itself, from the one
+// pointer read that fixed the identity; nothing can be registered from outside.
+const authorities = new WeakMap<CanonicalDraftReloadPublication, LiveReloadDraftAuthority>();
+
+/**
+ * Returns the captured pointer authority only for a still-live, genuine reload
+ * publication; released, superseded, or foreign objects yield null.
+ */
+export function readLiveReloadDraftAuthority(
+  publication: unknown,
+): LiveReloadDraftAuthority | null {
+  if (publication === null || typeof publication !== "object") return null;
+  const authority = authorities.get(publication as CanonicalDraftReloadPublication);
+  return authority !== undefined && owned.has(publication as CanonicalDraftReloadPublication)
+    ? authority : null;
+}
+
+function ownValue<T = unknown>(source: Record<string, unknown>, key: string): T | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(source, key);
+  return descriptor && "value" in descriptor ? (descriptor.value as T) : undefined;
+}
+
+/**
+ * Synchronously copies the full pointer snapshot from the one read that fixed the
+ * identity, before anything else can observe or mutate it. Malformed provenance
+ * yields undefined: ordinary reloads never depended on `saved`, so republish
+ * authority is simply absent instead of failing the reload.
+ */
+function captureLiveDraftPointers(
+  result: unknown,
+  documentId: string,
+): LiveReloadDraftAuthority | undefined {
+  try {
+    if (result === null || typeof result !== "object") return undefined;
+    const snapshot = result as Record<string, unknown>;
+    const savedValue = ownValue(snapshot, "saved");
+    const draftValue = ownValue(snapshot, "draft");
+    let saved: SavedRevisionPointer | null = null;
+    if (savedValue !== null) {
+      if (typeof savedValue !== "object") return undefined;
+      const savedPointer = savedValue as Record<string, unknown>;
+      const revisionId = ownValue<string>(savedPointer, "revisionId");
+      const sequence = ownValue<number>(savedPointer, "sequence");
+      if (ownValue(savedPointer, "kind") !== "saved" || ownValue(savedPointer, "documentId") !== documentId ||
+        typeof revisionId !== "string" || revisionId.trim().length === 0 ||
+        !Number.isSafeInteger(sequence) || (sequence as number) < 0) return undefined;
+      saved = Object.freeze({ kind: "saved", documentId, revisionId, sequence: sequence as number });
+    }
+    if (draftValue === null || typeof draftValue !== "object") return undefined;
+    const draftPointer = draftValue as Record<string, unknown>;
+    const draftRevisionId = ownValue<string>(draftPointer, "revisionId");
+    const draftSequence = ownValue<number>(draftPointer, "sequence");
+    const parentApprovalHash = ownValue<string>(draftPointer, "parentApprovalHash");
+    if (ownValue(draftPointer, "kind") !== "draft" || ownValue(draftPointer, "documentId") !== documentId ||
+      typeof draftRevisionId !== "string" || draftRevisionId.trim().length === 0 ||
+      !Number.isSafeInteger(draftSequence) || (draftSequence as number) < 0 ||
+      (parentApprovalHash !== undefined && (typeof parentApprovalHash !== "string" ||
+        !approvalHashPattern.test(parentApprovalHash)))) return undefined;
+    const draft: DraftRevisionPointer = Object.freeze({
+      kind: "draft", documentId, revisionId: draftRevisionId, sequence: draftSequence as number,
+      ...(parentApprovalHash === undefined ? {} : { parentApprovalHash }),
+    });
+    return Object.freeze({ saved, draft });
+  } catch {
+    return undefined;
+  }
+}
+
 export function createCanonicalDraftReloadService(
   dependencies: CanonicalDraftReloadDependencies,
 ): CanonicalDraftReloadService {
@@ -79,9 +157,21 @@ export function createCanonicalDraftReloadService(
         };
       } catch { return Promise.reject(failure()); }
       const run = async (): Promise<CanonicalDraftReloadPublication> => {
+        // The wrapped port lets the identity read's single pointer read also capture
+        // the full snapshot; the real port and receiver stay the only data sources.
+        let authority: LiveReloadDraftAuthority | undefined;
+        const wrapped = {
+          readPointers: async (documentId: string): Promise<unknown> => {
+            const result = await snapshot.persistence.readPointers.call(snapshot.persistence, documentId);
+            authority = captureLiveDraftPointers(result, documentId);
+            return result;
+          },
+          readRevision: (documentId: string, revisionId: string): Promise<unknown> =>
+            snapshot.persistence.readRevision.call(snapshot.persistence, documentId, revisionId),
+        };
         try {
           const identity = await readDurableDraftIdentity(
-            snapshot.documentId as string, snapshot.persistence,
+            snapshot.documentId as string, wrapped,
           );
           const envelope = await readReferencedRevisionEnvelope(identity, snapshot.persistence);
           const { plan, revision } = readCanonicalDraftContentParity(envelope);
@@ -103,6 +193,7 @@ export function createCanonicalDraftReloadService(
             release() { releasePublication(publication, hydrated); },
           });
           owned.add(publication);
+          if (authority !== undefined) authorities.set(publication, authority);
           // Atomic in-memory swap: no await between reading `current` and publishing,
           // so no callback can interleave. The previous publication is released only
           // after the swap, and a consumer's stale or repeated release stays a no-op.
