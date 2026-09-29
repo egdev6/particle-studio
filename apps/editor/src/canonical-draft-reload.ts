@@ -5,6 +5,7 @@ import { readCanonicalDraftContentParity } from "./canonical-draft-content-parit
 import {
   prehydrateCanonicalReferences,
   type CanonicalImageWorkspace,
+  type CanonicalPrehydrationCachePorts,
   type CanonicalPrehydrationDependencies,
 } from "./canonical-reference-prehydration.js";
 import {
@@ -20,6 +21,12 @@ export interface CanonicalDraftReloadDependencies {
   readonly persistence: DraftPointerReadPort & RevisionReadPort;
   readonly prehydration: CanonicalPrehydrationDependencies;
   readonly cache: PngImageCache;
+  /**
+   * Optional pre-queued snapshot of cache operations for hydration: forwarded as
+   * prehydration's method ports while tail coordination keeps keying the original
+   * `cache`. When omitted, hydration uses the cache's current methods.
+   */
+  readonly cachePorts?: CanonicalPrehydrationCachePorts;
 }
 
 export interface CanonicalDraftReloadPublication {
@@ -144,7 +151,8 @@ export function createCanonicalDraftReloadService(
       // this attempt queues or awaits anything: reassigning ports or options during
       // a pending read cannot mix identity and revision sources.
       let snapshot: { documentId: unknown; persistence: CanonicalDraftReloadDependencies["persistence"];
-        prehydration: CanonicalPrehydrationDependencies; cache: PngImageCache };
+        prehydration: CanonicalPrehydrationDependencies; cache: PngImageCache;
+        cachePorts?: CanonicalPrehydrationCachePorts };
       try {
         snapshot = {
           documentId: (options as { readonly documentId?: unknown }).documentId,
@@ -154,6 +162,7 @@ export function createCanonicalDraftReloadService(
             decodeVerifiedPng: dependencies.prehydration.decodeVerifiedPng,
           },
           cache: dependencies.cache,
+          cachePorts: dependencies.cachePorts,
         };
       } catch { return Promise.reject(failure()); }
       const run = async (): Promise<CanonicalDraftReloadPublication> => {
@@ -177,7 +186,7 @@ export function createCanonicalDraftReloadService(
           const { plan, revision } = readCanonicalDraftContentParity(envelope);
           // Hydration must complete, with every lease adopted, before any swap.
           const hydrated = await prehydrateCanonicalReferences(
-            plan, snapshot.prehydration, snapshot.cache,
+            plan, snapshot.prehydration, snapshot.cache, snapshot.cachePorts,
           );
           let exposed!: CanonicalImageWorkspace;
           const publication: CanonicalDraftReloadPublication = Object.freeze({

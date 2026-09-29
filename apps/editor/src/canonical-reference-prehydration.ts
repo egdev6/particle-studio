@@ -8,6 +8,18 @@ export interface CanonicalPrehydrationDependencies {
   readonly decodeVerifiedPng: (verified: VerifiedDurablePngAsset) => Promise<unknown> | unknown;
 }
 
+/**
+ * Pre-captured cache operations for one hydration invocation, typically bound to
+ * the original cache receiver. The third `cache` argument always remains the
+ * tail-coordination identity; these captured values are only what the
+ * operations invoke. When omitted, operations use the cache's current methods.
+ */
+export interface CanonicalPrehydrationCachePorts {
+  readonly adoptStaged: PngImageCache["adoptStaged"];
+  readonly resolveImage: PngImageCache["resolveImage"];
+  readonly disposeCandidate: PngImageCache["disposeCandidate"];
+}
+
 export interface CanonicalImageWorkspace {
   readonly plan: CanonicalReferencePlan;
   readonly images: readonly CachedPngImage[];
@@ -118,6 +130,7 @@ export async function prehydrateCanonicalReferences(
   plan: CanonicalReferencePlan,
   dependencies: CanonicalPrehydrationDependencies,
   cache: PngImageCache,
+  ports: CanonicalPrehydrationCachePorts = cache,
 ): Promise<CanonicalImageWorkspace> {
   const staged: CachedPngImage[] = [];
   const leases: PngImageLease[] = [];
@@ -126,6 +139,9 @@ export async function prehydrateCanonicalReferences(
     const snapshot = snapshotPlan(plan);
     if (typeof dependencies.rereadVerifiedPng !== "function" ||
       typeof dependencies.decodeVerifiedPng !== "function") throw failure();
+    if (ports === null || typeof ports !== "object" ||
+      typeof ports.adoptStaged !== "function" || typeof ports.resolveImage !== "function" ||
+      typeof ports.disposeCandidate !== "function") throw failure();
     if (snapshot.references.length > 0) {
       reservation = reserveTails(cache, snapshot.references);
       if (reservation.predecessors.length > 0) await Promise.all(reservation.predecessors);
@@ -155,12 +171,12 @@ export async function prehydrateCanonicalReferences(
 
     const images: CachedPngImage[] = [];
     for (const candidate of staged) {
-      const lease = cache.adoptStaged(candidate);
+      const lease = ports.adoptStaged.call(cache, candidate);
       if (lease === null) throw failure();
       leases.push(lease);
       const reference = snapshot.references[images.length]!;
       const leased = lease.image;
-      const resolved = cache.resolveImage(candidate);
+      const resolved = ports.resolveImage.call(cache, candidate);
       if (resolved === null || !imageMatches(leased, reference, resolved.handle) ||
         !imageMatches(resolved, reference, leased.handle)) throw failure();
       images.push(Object.freeze({ ...resolved }));
@@ -182,7 +198,7 @@ export async function prehydrateCanonicalReferences(
       try { lease.release(); } catch { /* Continue rolling back. */ }
     }
     for (const candidate of staged) {
-      try { cache.disposeCandidate(candidate); } catch { /* Continue rolling back. */ }
+      try { ports.disposeCandidate.call(cache, candidate); } catch { /* Continue rolling back. */ }
     }
     throw failure();
   } finally {
