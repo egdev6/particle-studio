@@ -591,7 +591,10 @@ export function createIndexedDbPersistenceAdapter(input: {
             await database.assets.add(storeAsset(asset));
             return;
           }
-          const verified = await readStoredAsset(existing);
+          // The verification re-digests the stored bytes through the
+          // module-load-bound Web Crypto promise, which Dexie cannot track.
+          // Dexie.waitFor keeps the transaction alive until it settles.
+          const verified = await Dexie.waitFor(readStoredAsset(existing));
           if (
             verified.mimeType !== asset.mimeType ||
             verified.byteLength !== asset.byteLength ||

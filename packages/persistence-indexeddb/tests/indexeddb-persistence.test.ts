@@ -176,6 +176,98 @@ describe("IndexedDB content-addressed assets", () => {
     expect(await adapter.readPointers("document-1")).toEqual(pointers);
   });
 
+  it("keeps the existing-asset transaction alive while its stored digest verifies", async () => {
+    // Regression: writeAsset verified an existing stored asset by awaiting
+    // readStoredAsset (whose sha256 goes through the module-load-bound Web
+    // Crypto promise) directly inside the rw transaction. Dexie cannot track
+    // that external promise, so the transaction autocommitted and the
+    // verification resumed in a dead transaction (PrematureCommitError,
+    // surfaced as PERSISTENCE_INDEXEDDB_WRITE_FAILED).
+    vi.resetModules();
+    const realDigest = cryptoLike.crypto.subtle.digest.bind(
+      cryptoLike.crypto.subtle,
+    );
+    let freshDexie: typeof Dexie | undefined;
+    let releaseInTransactionDigest: (() => void) | undefined;
+    const inTransactionDigestStarted = new Promise<void>((resolveStarted) => {
+      // capturedDigest is bound on module load, so the controlled digest must
+      // be installed before the module under test is (re)imported below.
+      // Only digests invoked inside a Dexie transaction are gated; the input
+      // hash digests run outside any transaction and pass straight through.
+      vi.spyOn(cryptoLike.crypto.subtle, "digest").mockImplementation(
+        (name, data) => {
+          const transaction = freshDexie?.currentTransaction;
+          if (transaction === null || transaction === undefined) {
+            return realDigest(name, data);
+          }
+          resolveStarted();
+          return new Promise<ArrayBuffer>((resolveDigest) => {
+            releaseInTransactionDigest = () => {
+              void realDigest(name, data).then(resolveDigest);
+            };
+          });
+        },
+      );
+    });
+    const { Dexie: FreshDexie } = (await import("dexie")) as typeof import("dexie");
+    const isolated = (await import(
+      "../src/index.js"
+    )) as typeof import("../src/index.js");
+    freshDexie = FreshDexie;
+    const isolatedAdapter = isolated.createIndexedDbPersistenceAdapter({
+      databaseName,
+    });
+    const original = await isolatedAdapter.writeAsset({
+      mimeType: "image/png",
+      bytes: new Uint8Array([7, 8, 9]),
+    });
+
+    const rewrite = isolatedAdapter.writeAsset({
+      mimeType: "image/png",
+      bytes: new Uint8Array([7, 8, 9]),
+    });
+    // The outcome is asserted below; detach early so the gated window cannot
+    // produce an unhandled rejection.
+    rewrite.catch(() => {});
+    await inTransactionDigestStarted;
+
+    // The transaction is now suspended on an external promise Dexie cannot
+    // track. Without Dexie.waitFor, nothing keeps the IndexedDB transaction
+    // alive, so it commits here. Prove that deterministically: a queued write
+    // on the same store can only start once the suspended transaction has
+    // finished. Pump macrotask turns (never wall-clock waits) until the
+    // sentinel observes the commit; with the fix the transaction is held
+    // alive, the sentinel stays queued, and the bounded pump simply elapses.
+    const sentinelDatabase = new FreshDexie(databaseName);
+    sentinelDatabase.version(3).stores({ assets: "sha256" });
+    let transactionFinished = false;
+    const sentinelPut = sentinelDatabase
+      .table("assets")
+      .put({
+        sha256: `sha256:${"f".repeat(64)}`,
+        mimeType: "image/png",
+        byteLength: 0,
+        bytes: new Uint8Array(0),
+      })
+      .then(() => {
+        transactionFinished = true;
+      });
+    for (
+      let macrotaskTurns = 0;
+      macrotaskTurns < 25 && !transactionFinished;
+      macrotaskTurns += 1
+    ) {
+      await new Promise<void>((resolveTurn) => setTimeout(resolveTurn, 0));
+    }
+    releaseInTransactionDigest?.();
+    await sentinelPut;
+
+    await expect(rewrite).resolves.toEqual(original);
+    await expect(
+      isolatedAdapter.readAsset(original.sha256),
+    ).resolves.toEqual(original);
+  });
+
   it("distinguishes missing, unreadable, mismatched, and quota failures without touching revisions or pointers", async () => {
     const adapter = createIndexedDbPersistenceAdapter({ databaseName });
     const saved = revision("saved-1", 1);
