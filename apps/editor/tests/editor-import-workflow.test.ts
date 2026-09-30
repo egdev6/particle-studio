@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FIRST_SLICE_DOCUMENT } from "@particle-studio/scene-document";
+import { FIRST_SLICE_DOCUMENT, type SceneDocumentV1 } from "@particle-studio/scene-document";
 import { createCompleteRevision } from "@particle-studio/persistence";
 import {
   createIndexedDbPersistenceAdapter, deleteIndexedDbPersistenceDatabase,
@@ -9,6 +9,7 @@ import { createPngImageCache } from "../src/png-image-cache.js";
 import { createDurableDraftWorkspace } from "../src/durable-draft-workspace.js";
 import type { DurableDraftPublication, DurableDraftPublishInput } from "../src/durable-draft-workspace.js";
 import { createEditorImportWorkflow } from "../src/editor-import-workflow.js";
+import { createEditorImageImportWorkflow } from "../src/editor-image-import-workflow.js";
 import type {
   EditorImportImageRequest, EditorImportWorkflowDependencies,
 } from "../src/editor-import-workflow.js";
@@ -228,6 +229,141 @@ afterEach(async () => {
 });
 
 describe("editor import workflow (real durable workspace over fake-indexeddb)", () => {
+  it("composes JSON -> PNG -> JSON through the real router with durable content and image ownership", async () => {
+    const databaseName = `editor-import-composition-${Date.now()}-${Math.random()}`;
+    integrationDatabases.push(databaseName);
+    const adapter = createIndexedDbPersistenceAdapter({ databaseName });
+    const sha256 = async (bytes: Uint8Array): Promise<string> => {
+      const digest = new Uint8Array(
+        await globalThis.crypto.subtle.digest("SHA-256", bytes.slice().buffer),
+      );
+      return `sha256:${[...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+    };
+    const handles: { close: ReturnType<typeof vi.fn> }[] = [];
+    const decodePng = async (bytes: Uint8Array) => {
+      expect(bytes).toEqual(new Uint8Array([1, 2, 3]));
+      const handle = { close: vi.fn() };
+      handles.push(handle);
+      return { width: 20, height: 10, handle };
+    };
+    const decodeVerifiedPng = async (verified: {
+      readonly sha256: string;
+      readonly mimeType: "image/png";
+      readonly byteLength: number;
+      readonly bytes: Uint8Array;
+    }) => ({ ...verified, ...await decodePng(verified.bytes) });
+    const cache = createPngImageCache({
+      importVerifiedPng: async (input) => ({
+        sha256: await sha256(input.bytes), mimeType: "image/png",
+        byteLength: input.bytes.byteLength, bytes: input.bytes.slice(),
+      }),
+      decodeVerifiedPng,
+    });
+    const workspace = createDurableDraftWorkspace({
+      persistence: adapter, cache,
+      prehydration: {
+        rereadVerifiedPng: (sha) => adapter.readAsset(sha),
+        decodeVerifiedPng,
+      },
+    });
+    // Separate counters work with both routes' different callback ordering.
+    let revisions = 0;
+    let sequences = 0;
+    const identity = {
+      revisionId: () => `draft-${++revisions}`,
+      sequence: () => ++sequences,
+      createdAt: () => 1234,
+    };
+    const geometry = { x: 5, y: 6, width: 30, height: 20, opacity: 1 };
+    const imageWorkflow = createEditorImageImportWorkflow({
+      workspace, assets: adapter, sha256, decodePng, cache, ...identity,
+      elementIdSource: () => ({ kind: "id", id: "image-1" }),
+      commandId: () => "cmd-1",
+      geometry: () => geometry,
+    });
+    const workflow = createEditorImportWorkflow({
+      workspace, imageWorkflow, documentId: "doc-1", ...identity,
+    });
+    const assertPublication = async (sequence: number, document: SceneDocumentV1) => {
+      const revisionId = `draft-${sequence}`;
+      const current = workspace.current!;
+      expect(current).not.toBeNull();
+      expect(current.revision).toEqual(createCompleteRevision({
+        documentId: "doc-1", revisionId, sequence, document,
+      }));
+      expect(current.workspace.plan.document).toEqual(document);
+      expect(await adapter.readPointers("doc-1")).toEqual({
+        saved: null,
+        draft: { kind: "draft", documentId: "doc-1", revisionId, sequence },
+      });
+      const storedRevision = (await adapter.readRevision("doc-1", revisionId))!;
+      expect(storedRevision).toEqual(current.revision);
+      expect(storedRevision.document).toEqual(document);
+      expect(current.revision.document).toEqual(document);
+      return current;
+    };
+
+    try {
+      // First JSON supplies settings, hierarchy, elements and animated tracks.
+      expect(await workflow(jsonRequest(validDocumentJson))).toBeUndefined();
+      const first = await assertPublication(1, FIRST_SLICE_DOCUMENT);
+      expect(first.workspace.images).toEqual([]);
+      expect(handles).toEqual([]);
+
+      expect(await workflow(imageRequest())).toBeUndefined();
+      const asset = {
+        sha256: await sha256(new Uint8Array([1, 2, 3])),
+        mimeType: "image/png" as const, byteLength: 3,
+        intrinsicWidth: 20, intrinsicHeight: 10,
+      };
+      const withImage = {
+        ...FIRST_SLICE_DOCUMENT,
+        rootIds: [...FIRST_SLICE_DOCUMENT.rootIds, "image-1"],
+        elements: [
+          ...FIRST_SLICE_DOCUMENT.elements,
+          { id: "image-1", type: "image" as const, asset, ...geometry },
+        ],
+      };
+      const png = await assertPublication(2, withImage);
+      expect(png).not.toBe(first);
+      expect(png.workspace.plan.references).toEqual([{ elementId: "image-1", ...asset }]);
+      const storedAsset = (await adapter.readAsset(asset.sha256))!;
+      expect(storedAsset.sha256).toBe(asset.sha256);
+      expect(storedAsset.mimeType).toBe("image/png");
+      expect(storedAsset.byteLength).toBe(3);
+      expect(storedAsset.bytes).toEqual(new Uint8Array([1, 2, 3]));
+      expect(png.workspace.images).toHaveLength(1);
+      const liveImage = png.workspace.images[0]!;
+      expect(handles).toHaveLength(2);
+      const liveHandle = handles.find((handle) => handle === liveImage.handle)!;
+      const discardedHandle = handles.find((handle) => handle !== liveImage.handle)!;
+      expect(liveHandle).toBe(handles[0]);
+      // Awaiting the route includes its temporary lease release. The publication
+      // still owns the adopted handle; prehydration's duplicate was discarded.
+      expect(liveHandle.close).not.toHaveBeenCalled();
+      expect(discardedHandle.close).toHaveBeenCalledTimes(1);
+      expect(cache.resolveImage(liveImage)?.handle).toBe(liveHandle);
+
+      const secondDocument = { ...FIRST_SLICE_DOCUMENT, seed: 73, loop: false };
+      expect(await workflow(jsonRequest(JSON.stringify(secondDocument)))).toBeUndefined();
+      const second = await assertPublication(3, secondDocument);
+      expect(second).not.toBe(png);
+      expect(second.workspace.plan.references).toEqual([]);
+      expect(second.workspace.images).toEqual([]);
+      expect(cache.resolveImage(liveImage)).toBeNull();
+      expect(liveHandle.close).toHaveBeenCalledTimes(1);
+      expect(discardedHandle.close).toHaveBeenCalledTimes(1);
+      png.release();
+      second.release();
+      second.release();
+      expect(liveHandle.close).toHaveBeenCalledTimes(1);
+      expect(workspace.current).toBeNull();
+    } finally {
+      workspace.current?.release();
+      cache.clear();
+    }
+  });
+
   it("publishes valid JSON through the real durable workspace with injected identity", async () => {
     const f = integrationFixture();
     const result = await f.workflow(jsonRequest(validDocumentJson));
