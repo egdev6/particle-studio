@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FIRST_SLICE_DOCUMENT, type SceneDocumentV1 } from "@particle-studio/scene-document";
+import { canonicalizeSceneDocument, FIRST_SLICE_DOCUMENT, type SceneDocumentV1 } from "@particle-studio/scene-document";
 import { createCompleteRevision } from "@particle-studio/persistence";
 import {
   createIndexedDbPersistenceAdapter, deleteIndexedDbPersistenceDatabase,
@@ -361,6 +361,167 @@ describe("editor import workflow (real durable workspace over fake-indexeddb)", 
     } finally {
       workspace.current?.release();
       cache.clear();
+    }
+  });
+
+  it("reloads JSON -> PNG publication in a cold instance with independent image ownership", async () => {
+    const databaseName = `editor-import-cold-${Date.now()}-${Math.random()}`;
+    integrationDatabases.push(databaseName);
+    const bytes: Uint8Array = new Uint8Array([1, 2, 3]);
+    const sha256 = async (input: Uint8Array): Promise<string> => {
+      const digest = new Uint8Array(
+        await globalThis.crypto.subtle.digest("SHA-256", input.slice().buffer),
+      );
+      return `sha256:${[...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+    };
+    const asset = {
+      sha256: await sha256(bytes), mimeType: "image/png" as const, byteLength: 3,
+      intrinsicWidth: 20, intrinsicHeight: 10,
+    };
+    const geometry = { x: 5, y: 6, width: 30, height: 20, opacity: 1 };
+    const expectedDocument: SceneDocumentV1 = {
+      ...FIRST_SLICE_DOCUMENT,
+      rootIds: [...FIRST_SLICE_DOCUMENT.rootIds, "image-1"],
+      elements: [
+        ...FIRST_SLICE_DOCUMENT.elements,
+        { id: "image-1", type: "image", asset, ...geometry },
+      ],
+    };
+    const expectedRevision = createCompleteRevision({
+      documentId: "doc-1", revisionId: "draft-2", sequence: 2,
+      document: expectedDocument,
+    });
+    const expectedPointers = {
+      saved: null,
+      draft: { kind: "draft", documentId: "doc-1", revisionId: "draft-2", sequence: 2 },
+    };
+    const expectedAsset = {
+      sha256: asset.sha256, mimeType: asset.mimeType, byteLength: 3, bytes,
+    };
+    const expectedPlan = {
+      document: expectedDocument,
+      canonicalEditableJson: new TextDecoder().decode(
+        canonicalizeSceneDocument.exportEditableJson(expectedDocument),
+      ),
+      references: [{ elementId: "image-1", ...asset }],
+    };
+    // Every invocation creates fresh ports, cache, workspace and decoder handles.
+    const session = (name: string) => {
+      const adapter = createIndexedDbPersistenceAdapter({ databaseName: name });
+      const handles: { close: ReturnType<typeof vi.fn> }[] = [];
+      const decodePng = vi.fn(async (input: Uint8Array) => {
+        expect(input).toEqual(bytes);
+        const handle = { close: vi.fn() };
+        handles.push(handle);
+        return { width: 20, height: 10, handle };
+      });
+      const decodeVerifiedPng = vi.fn(async (verified: typeof expectedAsset) => ({
+        ...verified, ...await decodePng(verified.bytes),
+      }));
+      const rereadVerifiedPng = vi.fn((sha: string) => adapter.readAsset(sha));
+      const cache = createPngImageCache({
+        importVerifiedPng: async (input) => ({
+          sha256: await sha256(input.bytes), mimeType: "image/png",
+          byteLength: input.bytes.byteLength, bytes: input.bytes.slice(),
+        }),
+        decodeVerifiedPng,
+      });
+      const workspace = createDurableDraftWorkspace({
+        persistence: adapter, cache,
+        prehydration: { rereadVerifiedPng, decodeVerifiedPng },
+      });
+      return { adapter, cache, workspace, handles, decodePng, decodeVerifiedPng, rereadVerifiedPng };
+    };
+    const warm = session(databaseName);
+    let cold: ReturnType<typeof session> | undefined;
+    try {
+      let revisions = 0;
+      let sequences = 0;
+      const identity = {
+        revisionId: () => `draft-${++revisions}`,
+        sequence: () => ++sequences,
+        createdAt: () => 1234,
+      };
+      const imageWorkflow = createEditorImageImportWorkflow({
+        workspace: warm.workspace, assets: warm.adapter, cache: warm.cache,
+        sha256, decodePng: warm.decodePng, ...identity,
+        elementIdSource: () => ({ kind: "id", id: "image-1" }),
+        commandId: () => "cmd-1", geometry: () => geometry,
+      });
+      const workflow = createEditorImportWorkflow({
+        workspace: warm.workspace, imageWorkflow, documentId: "doc-1", ...identity,
+      });
+      expect(await workflow(jsonRequest(validDocumentJson))).toBeUndefined();
+      expect(await workflow(imageRequest())).toBeUndefined();
+      const oldPublication = warm.workspace.current!;
+      expect(oldPublication.revision).toEqual(expectedRevision);
+      expect(oldPublication.workspace.plan).toEqual(expectedPlan);
+      expect(await warm.adapter.readRevision("doc-1", "draft-2")).toEqual(expectedRevision);
+      expect(await warm.adapter.readPointers("doc-1")).toEqual(expectedPointers);
+      const warmAsset = (await warm.adapter.readAsset(asset.sha256))!;
+      expect({ ...warmAsset, bytes: warmAsset.bytes }).toEqual(expectedAsset);
+      const oldImage = oldPublication.workspace.images[0]!;
+      const oldHandle = warm.handles[0]!;
+      expect(oldImage.handle).toBe(oldHandle);
+      expect(oldHandle.close).not.toHaveBeenCalled();
+      oldPublication.release();
+      warm.cache.clear();
+      expect(warm.workspace.current).toBeNull();
+      expect(warm.cache.resolveImage(oldImage)).toBeNull();
+      expect(oldHandle.close).toHaveBeenCalledTimes(1);
+      expect(warm.handles).toHaveLength(2);
+      for (const handle of warm.handles) expect(handle.close).toHaveBeenCalledTimes(1);
+
+      cold = session(databaseName);
+      expect(cold.adapter).not.toBe(warm.adapter);
+      expect(cold.cache).not.toBe(warm.cache);
+      expect(cold.workspace).not.toBe(warm.workspace);
+      expect(cold.workspace.current).toBeNull();
+      expect(cold.cache.resolveImage(oldImage)).toBeNull();
+      expect(cold.handles).toEqual([]);
+      expect(cold.decodePng).not.toHaveBeenCalled();
+      const reloaded = await cold.workspace.reload({ documentId: "doc-1" });
+      expect(cold.workspace.current).toBe(reloaded);
+      expect(reloaded.revision).toEqual(expectedRevision);
+      expect(reloaded.workspace.plan).toEqual(expectedPlan);
+      expect(await cold.adapter.readPointers("doc-1")).toEqual(expectedPointers);
+      expect(await cold.adapter.readRevision("doc-1", "draft-2")).toEqual(expectedRevision);
+      const storedAsset = (await cold.adapter.readAsset(asset.sha256))!;
+      expect({ ...storedAsset, bytes: storedAsset.bytes }).toEqual(expectedAsset);
+      expect(cold.rereadVerifiedPng).toHaveBeenCalledExactlyOnceWith(asset.sha256);
+      expect(cold.decodeVerifiedPng).toHaveBeenCalledTimes(1);
+      const decodedAsset = cold.decodeVerifiedPng.mock.calls[0]![0];
+      expect({ ...decodedAsset, bytes: decodedAsset.bytes }).toEqual(expectedAsset);
+      expect(cold.decodePng).toHaveBeenCalledExactlyOnceWith(bytes);
+      expect(reloaded.workspace.images).toHaveLength(1);
+      expect(cold.handles).toHaveLength(1);
+      const coldHandle = cold.handles[0]!;
+      const coldImage = reloaded.workspace.images[0]!;
+      expect(coldImage).toEqual({
+        sha256: asset.sha256, mimeType: asset.mimeType, byteLength: 3,
+        width: 20, height: 10, handle: coldHandle,
+      });
+      expect(coldHandle).not.toBe(oldHandle);
+      oldPublication.release();
+      oldPublication.workspace.release();
+      warm.cache.clear();
+      expect(oldHandle.close).toHaveBeenCalledTimes(1);
+      expect(coldHandle.close).not.toHaveBeenCalled();
+      expect(cold.cache.resolveImage(coldImage)?.handle).toBe(coldHandle);
+      expect(cold.workspace.current).toBe(reloaded);
+      reloaded.workspace.release();
+      reloaded.release();
+      reloaded.workspace.release();
+      cold.cache.clear();
+      cold.cache.clear();
+      expect(coldHandle.close).toHaveBeenCalledTimes(1);
+      expect(cold.cache.resolveImage(coldImage)).toBeNull();
+      expect(cold.workspace.current).toBeNull();
+    } finally {
+      cold?.workspace.current?.release();
+      cold?.cache.clear();
+      warm.workspace.current?.release();
+      warm.cache.clear();
     }
   });
 
