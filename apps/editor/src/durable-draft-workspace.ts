@@ -17,6 +17,7 @@ import type { CachedPngImage, PngImageCache } from "./png-image-cache.js";
 import type { RevisionReadPort } from "./referenced-revision-envelope.js";
 
 const failure = () => new Error("EDITOR_DURABLE_DRAFT_WORKSPACE_FAILED");
+const sourceMismatch = () => new Error("EDITOR_DURABLE_DRAFT_SOURCE_MISMATCH");
 
 /** Read-only ports and cache/prehydration instances the workspace binds attempts to. */
 export interface DurableDraftWorkspaceDependencies {
@@ -30,6 +31,12 @@ export interface DurableDraftWriteWorkspaceDependencies extends DurableDraftWork
   readonly persistence: ConditionalCompleteRevisionWritePort & DraftPointerReadPort & RevisionReadPort;
 }
 
+/** Caller-declared identity the live current must still carry when the attempt executes. */
+export interface DurableDraftExpectedSource {
+  readonly documentId: string;
+  readonly revisionId: string;
+}
+
 /** Publish inputs; every field is captured synchronously before the attempt queues. */
 export interface DurableDraftPublishInput {
   readonly documentId: string;
@@ -37,6 +44,16 @@ export interface DurableDraftPublishInput {
   readonly revisionId: () => string;
   readonly sequence: number;
   readonly createdAt: () => number;
+  /**
+   * Optional binding verified inside the queue, immediately before any staging:
+   * the live current publication must still carry exactly this identity. A
+   * missing or released current, a stale revision, or a cross-document current
+   * rejects with the stable `EDITOR_DURABLE_DRAFT_SOURCE_MISMATCH` — no durable
+   * write, no resource release, and no `current` change. A bound exact retry
+   * with a still-matching current is unchanged; a bound retry whose source has
+   * moved on is never silently rebased.
+   */
+  readonly expectedSource?: DurableDraftExpectedSource;
 }
 
 /** Frozen view of a publication's hydrated images; its release is publication authority. */
@@ -79,6 +96,14 @@ export interface DurableDraftWorkspace {
    * workspace (release `current` first to publish elsewhere). A release of
    * `current` during a pending attempt is not cancellation: an attempt whose
    * conditional write has already committed still publishes and becomes current.
+   * An optional `expectedSource` binds the attempt to the live current: at
+   * execution, immediately before any staging, the current publication must
+   * still carry exactly that document and revision — a released or missing
+   * current, a stale revision, or a cross-document current rejects with the
+   * stable `EDITOR_DURABLE_DRAFT_SOURCE_MISMATCH` before any durable write,
+   * resource release, or `current` change. A bound retry whose source has moved
+   * on is never silently rebased; a bound exact retry of a still-matching
+   * current returns the same facade without any decode or write.
    */
   publish(options: DurableDraftPublishInput): Promise<DurableDraftPublication>;
 }
@@ -238,6 +263,10 @@ export function createDurableDraftWorkspace(
             revisionId: options.revisionId,
             sequence: options.sequence,
             createdAt: options.createdAt,
+            expectedSource: options.expectedSource === undefined ? undefined : {
+              documentId: options.expectedSource.documentId,
+              revisionId: options.expectedSource.revisionId,
+            },
           },
           persistence: {
             readPointers: persistence.readPointers.bind(persistence),
@@ -262,6 +291,19 @@ export function createDurableDraftWorkspace(
         // The trusted prior is picked at execution from this workspace's private
         // current publication; foreign publications can never be adopted.
         const prior = current;
+        // Bound-source guard, evaluated live inside the queue before any
+        // staging: liveness (a non-null current is always unreleased — the
+        // facade release authority clears `current` before anything else) and
+        // identity (document and revision must match exactly). A missing,
+        // released, stale, or cross-document source rejects with no durable
+        // write, no resource release, and no `current` change.
+        const expected = snapshot.input.expectedSource;
+        if (expected !== undefined &&
+          (prior === null ||
+            prior.underlying.revision.documentId !== expected.documentId ||
+            prior.underlying.revision.revisionId !== expected.revisionId)) {
+          throw sourceMismatch();
+        }
         const underlying = await publishFirstCanonicalDraft({
           ...snapshot.input,
           // The genuine bound methods return validated pointer snapshots and

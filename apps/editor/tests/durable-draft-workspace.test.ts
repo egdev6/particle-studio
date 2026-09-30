@@ -10,7 +10,7 @@ import {
 import { createPngImageCache } from "../src/png-image-cache.js";
 import { createDurableDraftWorkspace } from "../src/durable-draft-workspace.js";
 import type {
-  DurableDraftPublishInput, DurableDraftPublication,
+  DurableDraftExpectedSource, DurableDraftPublishInput, DurableDraftPublication,
   DurableDraftWriteWorkspaceDependencies, DurableDraftWorkspaceDependencies,
 } from "../src/durable-draft-workspace.js";
 import { prehydrateCanonicalReferences } from "../src/canonical-reference-prehydration.js";
@@ -90,6 +90,14 @@ function fixture() {
 const publishInput = (revisionId: string, sequence: number, sha256: string) => ({
   documentId: "doc-1", editableJson: JSON.stringify(imageDocument(sha256)),
   revisionId: () => revisionId, sequence, createdAt: () => 1234,
+});
+
+const boundInput = (
+  revisionId: string, sequence: number, sha256: string,
+  expectedDocumentId: string, expectedRevisionId: string,
+) => ({
+  ...publishInput(revisionId, sequence, sha256),
+  expectedSource: { documentId: expectedDocumentId, revisionId: expectedRevisionId },
 });
 
 afterEach(async () => {
@@ -599,5 +607,132 @@ describe("durable draft workspace (actual persistence-indexeddb adapter)", () =>
     const throwing = { get documentId() { throw new Error("getter failed"); } };
     const input = Object.create(throwing) as DurableDraftPublishInput;
     await expect(f.workspace.publish(input)).rejects.toThrow("EDITOR_DURABLE_DRAFT_WORKSPACE_FAILED");
+  });
+
+  it("publishes against a matching expected source and returns the same facade for a bound exact retry", async () => {
+    const f = fixture();
+    await f.adapter.writeAsset({ mimeType: "image/png", bytes: bytesA });
+    await f.workspace.publish(publishInput("draft-1", 1, hashA));
+    const replaced = await f.workspace.publish(
+      boundInput("draft-2", 2, hashA, "doc-1", "draft-1"),
+    );
+    expect(f.workspace.current).toBe(replaced);
+    expect(replaced.revision).toMatchObject({ revisionId: "draft-2", sequence: 2 });
+    expect((await f.adapter.readPointers("doc-1")).draft)
+      .toMatchObject({ revisionId: "draft-2" });
+    // A bound exact retry returns the same facade without any decode or write.
+    let writes = 0;
+    const genuineWrite = f.deps.persistence.writeCompleteRevisionIfPointersMatch
+      .bind(f.deps.persistence);
+    f.deps.persistence.writeCompleteRevisionIfPointersMatch =
+      async (...args: Parameters<typeof genuineWrite>) => {
+        writes += 1;
+        return genuineWrite(...args);
+      };
+    const decodes = f.log.filter((entry) => entry.startsWith("decode:")).length;
+    const retry = await f.workspace.publish(
+      boundInput("draft-2", 2, hashA, "doc-1", "draft-2"),
+    );
+    expect(retry).toBe(replaced);
+    expect(f.workspace.current).toBe(replaced);
+    expect(writes).toBe(0);
+    expect(f.log.filter((entry) => entry.startsWith("decode:"))).toHaveLength(decodes);
+  });
+
+  it("rejects a bound publish stale behind a queued intervening change, then recovers", async () => {
+    const f = fixture();
+    await f.adapter.writeAsset({ mimeType: "image/png", bytes: bytesA });
+    await f.workspace.publish(publishInput("draft-1", 1, hashA));
+    let releaseGate!: () => void;
+    f.gate(new Promise<void>((resolve) => { releaseGate = resolve; }));
+    // The intervening change is queued first and parks the whole queue in its
+    // gated reread; the bound attempt waits behind it.
+    const intervening = f.workspace.publish(publishInput("draft-2", 2, hashA));
+    const bound = f.workspace.publish(boundInput("draft-3", 3, hashA, "doc-1", "draft-1"));
+    expect(f.log.filter((entry) => entry.startsWith("decode:"))).toHaveLength(1);
+    releaseGate();
+    const replaced = await intervening;
+    expect(replaced.revision.revisionId).toBe("draft-2");
+    // The binding is checked live inside the queue, after the intervening swap.
+    await expect(bound).rejects.toThrow("EDITOR_DURABLE_DRAFT_SOURCE_MISMATCH");
+    // Rejection is hygienic: no staging work, no write, current untouched.
+    expect(f.workspace.current).toBe(replaced);
+    expect((await f.adapter.readPointers("doc-1")).draft)
+      .toMatchObject({ revisionId: "draft-2" });
+    expect(f.log.filter((entry) => entry.startsWith("decode:"))).toHaveLength(2);
+    // Recovery: rebinding to the live current succeeds on the next attempt.
+    const recovered = await f.workspace.publish(
+      boundInput("draft-3", 3, hashA, "doc-1", "draft-2"),
+    );
+    expect(f.workspace.current).toBe(recovered);
+    expect(recovered.revision.revisionId).toBe("draft-3");
+  });
+
+  it("rejects a bound publish when no current publication exists", async () => {
+    const f = fixture();
+    await f.adapter.writeAsset({ mimeType: "image/png", bytes: bytesA });
+    await expect(f.workspace.publish(boundInput("draft-1", 1, hashA, "doc-1", "draft-1")))
+      .rejects.toThrow("EDITOR_DURABLE_DRAFT_SOURCE_MISMATCH");
+    expect(f.workspace.current).toBeNull();
+    // Rejected before any staging: no reread or decode ever ran.
+    expect(f.log).toEqual([]);
+  });
+
+  it("rejects a bound publish whose expected source was released", async () => {
+    const f = fixture();
+    await f.adapter.writeAsset({ mimeType: "image/png", bytes: bytesA });
+    const published = await f.workspace.publish(publishInput("draft-1", 1, hashA));
+    const logLength = f.log.length;
+    published.release();
+    expect(f.workspace.current).toBeNull();
+    await expect(f.workspace.publish(boundInput("draft-2", 2, hashA, "doc-1", "draft-1")))
+      .rejects.toThrow("EDITOR_DURABLE_DRAFT_SOURCE_MISMATCH");
+    expect(f.workspace.current).toBeNull();
+    expect(f.log).toHaveLength(logLength);
+  });
+
+  it("rejects a cross-document bound publish and keeps the live current", async () => {
+    const f = fixture();
+    await f.adapter.writeAsset({ mimeType: "image/png", bytes: bytesA });
+    const published = await f.workspace.publish(publishInput("draft-1", 1, hashA));
+    const logLength = f.log.length;
+    await expect(f.workspace.publish(boundInput("draft-2", 2, hashA, "doc-2", "draft-1")))
+      .rejects.toThrow("EDITOR_DURABLE_DRAFT_SOURCE_MISMATCH");
+    expect(f.workspace.current).toBe(published);
+    expect(f.log).toHaveLength(logLength);
+  });
+
+  it("snapshots expectedSource before queueing: later caller mutation cannot rebind", async () => {
+    const f = fixture();
+    await f.adapter.writeAsset({ mimeType: "image/png", bytes: bytesA });
+    await f.workspace.publish(publishInput("draft-1", 1, hashA));
+    let releaseGate!: () => void;
+    f.gate(new Promise<void>((resolve) => { releaseGate = resolve; }));
+    const expectedSource: DurableDraftExpectedSource = { documentId: "doc-1", revisionId: "draft-1" };
+    // Same object, mutable view: post-queue mutation must not reach the attempt.
+    const mutated: { documentId: string; revisionId: string } = expectedSource;
+    const bound = f.workspace.publish(
+      { ...publishInput("draft-2", 2, hashA), expectedSource },
+    );
+    mutated.documentId = "doc-2";
+    mutated.revisionId = "redirected";
+    releaseGate();
+    const published = await bound;
+    expect(f.workspace.current).toBe(published);
+    expect(published.revision.revisionId).toBe("draft-2");
+  });
+
+  it("never silently rebases a bound retry onto a different live source", async () => {
+    const f = fixture();
+    await f.adapter.writeAsset({ mimeType: "image/png", bytes: bytesA });
+    await f.workspace.publish(publishInput("draft-1", 1, hashA));
+    // The live prior moves on to a durable revision; an unbound retry would
+    // rebase onto it, but the bound attempt must reject instead.
+    await f.seedDraft("rev-2", 2, hashA, bytesA, approvalHash);
+    await f.workspace.reload({ documentId: "doc-1" });
+    const logLength = f.log.length;
+    await expect(f.workspace.publish(boundInput("draft-1", 1, hashA, "doc-1", "draft-1")))
+      .rejects.toThrow("EDITOR_DURABLE_DRAFT_SOURCE_MISMATCH");
+    expect(f.log).toHaveLength(logLength);
   });
 });
