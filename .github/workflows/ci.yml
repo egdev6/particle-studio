@@ -30,7 +30,7 @@ jobs:
       - name: Prepare generated validator
         run: npm run validator:prepare
       - name: Test SceneDocument, runtime, commands, and persistence adapters
-        run: npx vitest run --project core packages/scene-document/tests packages/runtime/tests packages/commands/tests packages/persistence/tests packages/persistence-indexeddb/tests packages/persistence-fs/tests packages/export/tests packages/webmcp-adapter/tests apps/headless-mcp/tests apps/editor/tests/durable-draft-workspace.test.ts apps/editor/tests/editor-durable-editing.test.ts apps/editor/tests/editor-image-import-workflow.test.ts apps/editor/tests/editor-import-workflow.test.ts
+        run: npx vitest run --project core packages/scene-document/tests packages/runtime/tests packages/commands/tests packages/persistence/tests packages/persistence-indexeddb/tests packages/persistence-fs/tests packages/export/tests packages/webmcp-adapter/tests apps/headless-mcp/tests apps/editor/tests/durable-draft-workspace.test.ts apps/editor/tests/editor-durable-editing.test.ts apps/editor/tests/editor-browser-agent-workspace.test.ts apps/editor/tests/editor-image-import-workflow.test.ts apps/editor/tests/editor-import-workflow.test.ts
       - name: Prepare validator for editor tests
         run: npm run validator:prepare
       - name: Test editor command boundary
