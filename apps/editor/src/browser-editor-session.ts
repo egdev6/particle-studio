@@ -2,6 +2,7 @@ import { createIndexedDbPersistenceAdapter } from "@particle-studio/persistence-
 import type { DurableDraftPublication } from "./durable-draft-workspace.js";
 import { browserPngDecodePrimitive, browserSha256 } from "./browser-png-platform.js";
 import { createEditorSession } from "./editor-session.js";
+import { EMPTY_SCENE_JSON } from "./empty-scene.js";
 
 // One local editor slot; absence never creates a durable document.
 export const BROWSER_DATABASE = "particle-studio-browser-viewer";
@@ -98,9 +99,16 @@ export function createBrowserEditorSession() {
     if (disposed || !ready || importBusy) return Promise.reject(new Error("EDITOR_JSON_IMPORT_UNAVAILABLE"));
     return ownImport({ kind: "editable-json-import", editableJson });
   };
+  const createScene = (): Promise<BrowserCurrent | null> => {
+    if (disposed || !ready || importBusy || session.workspace.current !== null) {
+      return Promise.reject(new Error("EDITOR_SCENE_CREATION_UNAVAILABLE"));
+    }
+    // Delegate once: JSON owns the shared flight and startup-known sequence floor.
+    return importJson(EMPTY_SCENE_JSON);
+  };
   const importPng = (file: File, rectangle: PngPlacement): Promise<BrowserCurrent | null> => {
     if (disposed || !ready || importBusy) return Promise.reject(new Error("EDITOR_PNG_IMPORT_UNAVAILABLE"));
-    if (!currentView()) return Promise.reject(new Error("Import JSON first to create an editable document."));
+    if (!currentView()) return Promise.reject(new Error("Create a scene or import JSON first to create an editable document."));
     try {
       const captured = { x: rectangle.x, y: rectangle.y, width: rectangle.width, height: rectangle.height };
       if (!Object.values(captured).every(Number.isFinite) || captured.width <= 0 || captured.height <= 0) {
@@ -121,6 +129,6 @@ export function createBrowserEditorSession() {
     });
     return disposal;
   };
-  return Object.freeze({ start, importJson, importPng, dispose,
+  return Object.freeze({ start, createScene, importJson, importPng, dispose,
     get current() { return currentView(); }, get disposed() { return disposed; } });
 }

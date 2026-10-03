@@ -20,9 +20,54 @@ function revision(document: SceneDocumentV1, revisionId: string, sequence: numbe
   return { documentId: BROWSER_DOCUMENT, revisionId, sequence, document, canonicalBytes,
     canonicalization: { identifier: "jcs-1", byteLength: canonicalBytes.length } };
 }
+function orderedRevisionRows(rows: Awaited<ReturnType<typeof nativeRows>>) {
+  const revisions = (rows.revisions as ReturnType<typeof revision>[]).slice().sort((left, right) => {
+    if (left.documentId !== right.documentId) return left.documentId < right.documentId ? -1 : 1;
+    return left.revisionId < right.revisionId ? -1 : left.revisionId > right.revisionId ? 1 : 0;
+  });
+  return { ...rows, revisions };
+}
 const pointer = (revisionId: string, sequence: number, kind = "draft") => ({ kind, documentId: BROWSER_DOCUMENT, revisionId, sequence });
 const pngButton = (page: Page) => page.getByRole("button", { name: "Import PNG", exact: true });
 const jsonButton = (page: Page) => page.getByRole("button", { name: "Import editable JSON" });
+const createButton = (page: Page) => page.getByRole("button", { name: "Create blank scene", exact: true });
+const blankScene = (): SceneDocumentV1 => ({ schemaVersion: 1, durationUs: 1_000_000,
+  playbackRange: { startUs: 0, endUs: 1_000_000 }, loop: true, seed: 42,
+  tracks: [], rootIds: ["root"], elements: [{ id: "root", type: "group", childrenIds: [] }] });
+async function blankAlpha(page: Page) {
+  return page.locator("#scene").evaluate((canvas: HTMLCanvasElement) =>
+    Array.from(canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data)
+      .filter((_value, index) => index % 4 === 3));
+}
+async function createBlank(page: Page) {
+  await createButton(page).click();
+  await expect(page.locator("#status")).toContainText("Rendered imported draft at 0 µs.");
+}
+// Blank creation has no image hash/decode. Gate the actual native preparation read,
+// after its result was captured, without keeping a write transaction alive.
+async function holdCreation(page: Page, reject = false) {
+  await page.addInitScript((reject) => {
+    const get = IDBObjectStore.prototype.get;
+    IDBObjectStore.prototype.get = function (key) {
+      const request = get.call(this, key);
+      const root = document.documentElement;
+      if (this.name !== "pointers" || this.transaction.mode !== "readonly" || root.dataset.hold !== "yes") return request;
+      root.dataset.hold = "consumed";
+      const intercept = (event: Event) => {
+        event.stopImmediatePropagation(); request.removeEventListener("success", intercept, true);
+        root.dataset.creation = "pending";
+        void (async () => {
+          while (root.dataset.settle !== "yes") await new Promise((resolve) => setTimeout(resolve, 10));
+          if (reject) Object.defineProperty(request, "error", { value: new DOMException("Preparation fault", "UnknownError") });
+          request.dispatchEvent(new Event(reject ? "error" : "success", { cancelable: true }));
+          setTimeout(() => { root.dataset.creation = "settled"; }, 0);
+        })();
+      };
+      request.addEventListener("success", intercept, true);
+      return request;
+    };
+  }, reject);
+}
 async function frame(page: Page) {
   return page.locator("#scene").evaluate((canvas: HTMLCanvasElement) =>
     [60, 181, 188, 240].map((x) => Array.from(canvas.getContext("2d")!.getImageData(x, 25, 1, 1).data)));
@@ -70,6 +115,112 @@ const hold = (page: Page) => page.locator("html").evaluate((root) => { (root as 
 const settle = (page: Page) => page.locator("html").evaluate((root) => { (root as HTMLElement).dataset.settle = "yes"; });
 
 for (const saved of [false, true]) {
+  test(`explicit blank creation is canonical, durable and PNG-usable (saved-only=${saved})`, async ({ page }) => {
+    const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+    await holdDecode(page); await open(page);
+    if (saved) {
+      const row = revision(scene(), "saved-41", 41);
+      await nativeRows(page, { revisions: [row], assets: [asset], pointers: [{ documentId: BROWSER_DOCUMENT,
+        saved: pointer(row.revisionId, 41, "saved"), draft: null }] });
+      await page.reload(); await expect(page.locator("#status")).toContainText("unpersisted sample");
+    }
+    const before = await nativeRows(page);
+    if (!saved) expect(Object.values(before).every((rows) => Array.isArray(rows) && rows.length === 0)).toBe(true);
+    await expect(createButton(page)).toBeEnabled();
+    expect(await createButton(page).evaluate((button) => button.closest("form"))).toBeNull();
+    await page.getByLabel("Editable JSON", { exact: true }).fill("not JSON");
+    await createBlank(page);
+    const rows = await nativeRows(page);
+    const sequence = saved ? 42 : 1;
+    const row = (rows.revisions as ReturnType<typeof revision>[]).find((row) => row.sequence === sequence)!;
+    expect(row.revisionId).toMatch(/^[a-f0-9-]{36}$/);
+    expect(row).toEqual(revision(blankScene(), row.revisionId, sequence));
+    expect(orderedRevisionRows(rows)).toEqual(orderedRevisionRows({ ...before, revisions: [...before.revisions as unknown[], row],
+      pointers: [{ documentId: BROWSER_DOCUMENT, saved: saved ? pointer("saved-41", 41, "saved") : null,
+        draft: pointer(row.revisionId, sequence) }] }));
+    expect((await blankAlpha(page)).every((alpha) => alpha === 0)).toBe(true);
+    expect(await page.locator("html").getAttribute("data-bitmaps")).toBeNull();
+    await expect(createButton(page)).toBeDisabled();
+    await createButton(page).dispatchEvent("click"); expect(await nativeRows(page)).toEqual(rows);
+    await page.reload(); await expect(page.locator("#status")).toHaveText("Rendered restored draft at 0 µs.");
+    expect(await nativeRows(page)).toEqual(rows);
+    expect((await blankAlpha(page)).every((alpha) => alpha === 0)).toBe(true);
+    await expect(createButton(page)).toBeDisabled();
+    await select(page); await place(page); await pngButton(page).click();
+    await expect(page.locator("#png-status")).toContainText("PNG import complete");
+    const after = await nativeRows(page);
+    const next = (after.revisions as ReturnType<typeof revision>[]).find((candidate) => candidate.sequence === sequence + 1)!;
+    const id = next.document.elements.at(-1)!.id; expect(id).toMatch(/^image-[a-f0-9-]{36}$/);
+    const document = blankScene(); document.rootIds.push(id);
+    document.elements.push({ id, type: "image", ...placement, opacity: 1,
+      asset: { sha256: hash, mimeType: "image/png", byteLength: bytes.length, intrinsicWidth: 1, intrinsicHeight: 1 } });
+    expect(orderedRevisionRows(after)).toEqual(orderedRevisionRows({ ...rows, revisions: [...rows.revisions as unknown[], next], assets: [asset],
+      pointers: [{ documentId: BROWSER_DOCUMENT, saved: saved ? pointer("saved-41", 41, "saved") : null,
+        draft: pointer(next.revisionId, sequence + 1) }] }));
+    expect(next).toEqual(revision(document, next.revisionId, sequence + 1));
+    expect(await frame(page)).toEqual([[0, 0, 0, 0], [0, 0, 0, 255], [0, 0, 0, 0], [0, 0, 0, 0]]);
+    expect(errors).toEqual([]);
+  });
+}
+
+for (const during of [false, true]) {
+  test(`external winner survives blank creation with no retry/rebase (during preparation=${during})`, async ({ page, context }) => {
+    await holdCreation(page); await open(page);
+    const previousFrame = await frame(page);
+    const other = await context.newPage(); await open(other);
+    if (during) {
+      await hold(page); await createButton(page).click();
+      await expect(page.locator("html")).toHaveAttribute("data-creation", "pending");
+      await expect(createButton(page)).toBeDisabled(); await expect(jsonButton(page)).toBeDisabled();
+    }
+    await publishJson(other); const winner = await nativeRows(other);
+    if (during) await settle(page); else await createButton(page).click();
+    await expect(page.locator("#status")).toContainText("refresh");
+    expect(await nativeRows(page)).toEqual(winner); expect(await frame(page)).toEqual(previousFrame);
+    await expect(pngButton(page)).toBeDisabled();
+    await createButton(page).click(); await expect(page.locator("#status")).toContainText("refresh");
+    expect(await nativeRows(page)).toEqual(winner); expect(await frame(page)).toEqual(previousFrame);
+    await other.close();
+  });
+}
+
+for (const dispose of [false, true]) for (const reject of [false, true]) {
+  test(`blank preparation preserves local state through owned settlement (pagehide=${dispose}, reject=${reject})`, async ({ page }) => {
+    const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+    await holdCreation(page, reject); await holdDecode(page); await open(page);
+    const before = await nativeRows(page); const previousFrame = await frame(page);
+    await hold(page); await createButton(page).click();
+    await expect(page.locator("html")).toHaveAttribute("data-creation", "pending");
+    await expect(jsonButton(page)).toBeDisabled(); await expect(pngButton(page)).toBeDisabled();
+    await createButton(page).dispatchEvent("click");
+    await page.locator("#json-import").dispatchEvent("submit");
+    expect(await nativeRows(page)).toEqual(before); expect(await frame(page)).toEqual(previousFrame);
+    if (dispose) await page.evaluate(() => { window.dispatchEvent(new Event("pagehide")); window.dispatchEvent(new Event("pagehide")); });
+    const markup = () => page.locator("body").evaluate(() => ["#json-import", "#png-import", "#status", "#png-status"]
+      .map((selector) => document.querySelector(selector)!.outerHTML).concat(
+        Array.from(document.querySelectorAll("button")).filter((button) => button.textContent === "Create blank scene").map((button) => button.outerHTML)));
+    const disposedMarkup = await markup(); await settle(page);
+    await expect(page.locator("html")).toHaveAttribute("data-creation", "settled");
+    if (reject) {
+      if (!dispose) await expect(page.locator("#status")).toContainText("try again");
+      expect(await nativeRows(page)).toEqual(before); expect(await frame(page)).toEqual(previousFrame);
+    } else {
+      await expect.poll(async () => (await nativeRows(page)).revisions).toHaveLength(1);
+      const after = await nativeRows(page); const row = (after.revisions as ReturnType<typeof revision>[])[0]!;
+      expect(after).toEqual({ ...before, revisions: [revision(blankScene(), row.revisionId, 1)],
+        pointers: [{ documentId: BROWSER_DOCUMENT, saved: null, draft: pointer(row.revisionId, 1) }] });
+      if (!dispose) await expect(page.locator("#status")).toContainText("Rendered imported draft at 0 µs.");
+    }
+    if (dispose) {
+      await createButton(page).dispatchEvent("click"); await page.locator("#json-import").dispatchEvent("submit");
+      expect(await markup()).toEqual(disposedMarkup); expect(await frame(page)).toEqual(previousFrame);
+      await expect(createButton(page)).toBeDisabled(); await expect(page.locator("#json-import")).toHaveAttribute("aria-busy", "true");
+    }
+    expect(await page.locator("html").getAttribute("data-bitmaps")).toBeNull(); expect(errors).toEqual([]);
+  });
+}
+
+for (const saved of [false, true]) {
   test(`PNG requires user JSON, never seeds the sample (saved-only=${saved})`, async ({ page }) => {
     await open(page);
     if (saved) {
@@ -81,7 +232,7 @@ for (const saved of [false, true]) {
     }
     const before = await nativeRows(page);
     await expect(pngButton(page)).toBeDisabled();
-    await expect(page.locator("#png-status")).toContainText("Import JSON first");
+    await expect(page.locator("#png-status")).toContainText("Create a scene or import JSON");
     await expect(jsonButton(page)).toBeEnabled();
     await page.locator("#png-import").evaluate((form) => form.dispatchEvent(new Event("submit", { cancelable: true })));
     expect(await nativeRows(page)).toEqual(before);

@@ -69,7 +69,7 @@ export function mountEditorPngImportControls(options: PngControlsOptions) {
       ready = value;
       hasCurrent = editableCurrent;
       if (changed && ready) report("idle", hasCurrent ? "Select a PNG file and placement in scene units."
-        : "Import JSON first to create an editable document.");
+        : "Create a scene or import JSON first to create an editable document.");
       update();
     },
     setBusy(value: boolean) {

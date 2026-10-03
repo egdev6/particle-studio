@@ -43,6 +43,10 @@ const controls = mountEditorJsonImportControls({
   input: document.querySelector<HTMLTextAreaElement>("#editable-json")!,
   button: document.querySelector<HTMLButtonElement>("#import-json")!,
   status, activity,
+  createButton: document.querySelector<HTMLButtonElement>("#create-scene")!,
+  createScene: browser.createScene,
+  hasCurrent: () => browser.current !== null,
+  onCreated: renderCurrent,
   workflow: (request) => {
     if (request.kind !== "editable-json-import") return Promise.reject(new Error("JSON input required."));
     return browser.importJson(request.editableJson);

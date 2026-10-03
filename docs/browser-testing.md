@@ -27,13 +27,18 @@ referenced PNG assets must already exist locally. Controls disable during import
 with visible success or actionable failure. Saved-only imports advance above the
 startup-known saved sequence without discarding it. Failures preserve the prior
 frame/publication; stale competing-tab attempts never retry or rebase.
-To insert a PNG, first create an editable publication with JSON (or restore a
-current draft), then select **PNG file** and placement in scene units. Visible
+**Create blank scene** publishes a genuine draft without JSON/File input after
+healthy empty/saved-only startup. One empty structural group renders a blank frame;
+refresh retains its revision/pointer identity. Existing current, corrupt startup,
+missing context and disposed state block creation; this is not a reset action.
+Creation reuses the JSON sequence floor and flight, preserving saved-only 41→42.
+To insert a PNG, create a blank scene, import JSON or restore a current draft,
+then select **PNG file** and placement in scene units. Visible
 x/y/width/height defaults are 0/0/64/64 with opacity 1; positions must be finite,
 sizes positive/finite. File and rectangle are captured before preparation. Both
-actions disable in the shared pending lane, including same-turn submissions;
+imports and creation disable in the shared pending lane, including same-turn submissions;
 PNG needs no textarea JSON and JSON needs no File. Empty/saved-only state blocks
-PNG with **Import JSON first**, never silently creating a draft from the sample.
+PNG with **Create a scene or import JSON**, never silently creating a draft from the sample.
 PNG verification/decode/stale-source errors preserve documents/pointers/current
 and frame, but may leave immutable asset bytes already written. No universal
 all-stores rollback, cleanup or garbage collection is promised.
@@ -86,6 +91,9 @@ never reuses existing servers:
   MIME/content/File-read/decode/asset-reread/placement failures with exact asset
   effects, stale winners before/during preparation, and delayed PNG pagehide on
   resolution/rejection. Fault injection patches browser APIs only, not a product
-  seed/global/fixture entry. Existing startup and JSON cases remain selected.
+  seed/global/fixture entry. Explicit blank creation also proves canonical content,
+  all-canvas blank alpha, saved retention, refresh identity and real PNG insertion.
+  Native pointer-read gates cover winners before/during preparation, failures and
+  pagehide resolution/rejection without image decoding. Existing cases remain selected.
   Core tests focus on owned workflow settlement; distinct jsdom controls tests check
   readiness, input capture, single flight and listener removal without React.

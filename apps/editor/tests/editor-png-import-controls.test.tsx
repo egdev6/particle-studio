@@ -44,7 +44,7 @@ it("blocks unavailable/context/corrupt startup and no-current, then validates Fi
   f.select(); f.activate();
   expect(f.importPng).not.toHaveBeenCalled();
   f.png.setReady(true, false);
-  expect(f.status.textContent).toContain("Import JSON first");
+  expect(f.status.textContent).toContain("Create a scene or import JSON");
   expect(f.button.disabled).toBe(true);
   f.activate();
   f.ready(); f.select(null); f.activate();
