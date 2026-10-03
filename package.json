@@ -29,7 +29,7 @@
     "pretest:integration": "npm run validator:prepare",
     "test:integration": "vitest run --project integration",
     "pretest:browser": "npm run validator:prepare",
-    "test:browser": "playwright test --project chromium",
+    "test:browser": "playwright test --project chromium --project chromium-preview",
     "pretest:performance": "npm run validator:prepare",
     "test:performance": "playwright test --project chromium-performance",
     "pretest:product": "npm run validator:prepare",
