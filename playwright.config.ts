@@ -15,7 +15,7 @@ export default defineConfig({
     },
     {
       name: "chromium-preview",
-      testMatch: "static-viewer.spec.ts",
+      testMatch: ["static-viewer.spec.ts", "durable-import.spec.ts"],
       use: { browserName: "chromium", baseURL: "http://127.0.0.1:4176" },
     },
   ],

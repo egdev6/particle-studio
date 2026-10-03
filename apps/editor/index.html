@@ -3,13 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Particle Studio — Read-only scene viewer</title>
+    <title>Particle Studio — JSON scene editor</title>
   </head>
   <body>
-    <h1>Read-only scene viewer</h1>
-    <p>Restores a local draft, or shows an unpersisted sample. No editing or animation.</p>
+    <h1>JSON scene editor</h1>
+    <p>Restores a local draft, or shows an unpersisted sample. Import editable JSON to publish a local draft.</p>
+    <form id="json-import" aria-label="JSON import controls" aria-busy="false">
+      <label for="editable-json">Editable JSON</label>
+      <textarea id="editable-json" rows="8" cols="60" disabled></textarea>
+      <button id="import-json" type="submit" disabled>Import editable JSON</button>
+    </form>
     <p id="status" role="status">Loading local scene…</p>
-    <canvas id="scene" width="256" height="160" aria-label="Read-only scene"></canvas>
+    <canvas id="scene" width="256" height="160" aria-label="Current scene"></canvas>
     <script type="module" src="/src/editor-canvas-entry.ts"></script>
   </body>
 </html>

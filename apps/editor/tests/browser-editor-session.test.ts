@@ -45,6 +45,66 @@ it.each([false, true])("waits for owned reload settlement before idempotent clea
   expect(readPointers).toHaveBeenCalledTimes(1);
 });
 
+it.each([false, true])("owns actual workflow flight through disposal (reject=%s)", async (reject) => {
+  const pending = deferred<unknown>();
+  const release = vi.fn();
+  const clear = vi.fn();
+  const revision = { documentId: "browser-document", revisionId: "source", sequence: 7 };
+  const previous = { revision, workspace: { images: [] }, release };
+  const workspace = { current: previous };
+  const importWorkflow = vi.fn(async () => {
+    await pending.promise;
+    workspace.current = { ...previous, revision: { ...revision, revisionId: "replacement" } };
+  });
+  mocks.persistence.mockReturnValue({ readPointers: async () => ({ draft: revision, saved: null }) });
+  mocks.session.mockReturnValue({ workspace, cache: { clear }, reload: async () => previous, importWorkflow });
+  const browser = createBrowserEditorSession();
+  await expect(browser.importJson("early")).rejects.toThrow();
+  await browser.start();
+  const view = browser.current;
+  expect(view).toEqual({ revision, images: [] });
+  expect(Object.isFrozen(view)).toBe(true);
+  const flight = browser.importJson("captured");
+  await expect(browser.importJson("duplicate")).rejects.toThrow();
+  expect(importWorkflow).toHaveBeenCalledExactlyOnceWith({ kind: "editable-json-import", editableJson: "captured" });
+  expect(browser.current).toBe(view);
+  const disposal = browser.dispose();
+  expect(browser.dispose()).toBe(disposal);
+  expect(browser.current).toBeNull();
+  expect(clear).not.toHaveBeenCalled();
+  expect(release).not.toHaveBeenCalled();
+  if (reject) pending.reject(new Error("publish failed"));
+  else pending.resolve(undefined);
+  if (reject) await expect(flight).rejects.toThrow("publish failed");
+  else await expect(flight).resolves.toBeNull();
+  await disposal;
+  expect(clear).toHaveBeenCalledTimes(1);
+  expect(release).toHaveBeenCalledTimes(1);
+  await expect(browser.importJson("late")).rejects.toThrow();
+  expect(importWorkflow).toHaveBeenCalledTimes(1);
+});
+
+it("captures the validated startup floor and blocks import after startup failure", async () => {
+  const readPointers = vi.fn(async () => ({ saved: { sequence: 41 }, draft: null }));
+  const importWorkflow = vi.fn(async () => undefined);
+  mocks.persistence.mockReturnValue({ readPointers });
+  mocks.session.mockReturnValue({ workspace: { current: null }, cache: { clear: vi.fn() }, importWorkflow });
+  const browser = createBrowserEditorSession();
+  const deps = mocks.session.mock.calls.at(-1)![0];
+  expect(deps.jsonImportSequenceFloor()).toBe(0);
+  await browser.start();
+  expect(deps.jsonImportSequenceFloor()).toBe(41);
+  await browser.importJson("user JSON");
+  expect(readPointers).toHaveBeenCalledTimes(1);
+  await browser.dispose();
+  readPointers.mockRejectedValue(new Error("corrupt"));
+  const failed = createBrowserEditorSession();
+  await expect(failed.start()).rejects.toThrow("corrupt");
+  await expect(failed.importJson("blocked")).rejects.toThrow();
+  expect(importWorkflow).toHaveBeenCalledTimes(1);
+  await failed.dispose();
+});
+
 it("does not start a reload after disposal during the initial pointer read", async () => {
   const pending = deferred<{ draft: object; saved: null }>();
   const reload = vi.fn();

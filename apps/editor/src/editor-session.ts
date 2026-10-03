@@ -22,6 +22,8 @@ export interface EditorSessionDependencies {
   readonly documentId: string;
   readonly sha256: Sha256;
   readonly decodePng: PngDecodePrimitive["decodePng"];
+  /** Startup-known lower bound for JSON imports only; invoked once per activation, never at construction. */
+  readonly jsonImportSequenceFloor?: () => number;
   readonly revisionId: () => string;
   readonly createdAt: () => number;
   readonly commandId: () => string;
@@ -50,6 +52,7 @@ export function createEditorSession(deps: EditorSessionDependencies): EditorSess
     documentId: deps.documentId,
     sha256: deps.sha256,
     decodePng: deps.decodePng,
+    jsonImportSequenceFloor: deps.jsonImportSequenceFloor,
     revisionId: deps.revisionId,
     createdAt: deps.createdAt,
     commandId: deps.commandId,
@@ -90,7 +93,18 @@ export function createEditorSession(deps: EditorSessionDependencies): EditorSess
   });
   const importWorkflow = createEditorImportWorkflow({
     workspace, imageWorkflow, documentId: captured.documentId,
-    revisionId: captured.revisionId, createdAt: captured.createdAt, sequence,
+    revisionId: captured.revisionId, createdAt: captured.createdAt,
+    sequence: () => {
+      const floor = captured.jsonImportSequenceFloor === undefined ? 0 : captured.jsonImportSequenceFloor();
+      const current = workspace.current?.revision.sequence ?? 0;
+      if (!Number.isSafeInteger(floor) || floor < 0 ||
+        !Number.isSafeInteger(current) || current < 0) {
+        throw new Error("EDITOR_JSON_IMPORT_SEQUENCE_INVALID");
+      }
+      const next = Math.max(current, floor) + 1;
+      if (!Number.isSafeInteger(next)) throw new Error("EDITOR_JSON_IMPORT_SEQUENCE_INVALID");
+      return next;
+    },
   });
   return Object.freeze({
     workspace, cache, importWorkflow,

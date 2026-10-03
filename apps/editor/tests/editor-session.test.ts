@@ -6,6 +6,7 @@ import {
 import {
   createIndexedDbPersistenceAdapter, deleteIndexedDbPersistenceDatabase,
 } from "@particle-studio/persistence-indexeddb";
+import { createCompleteRevision, createSavedRevisionPointer } from "@particle-studio/persistence";
 import { createEditorSession, type EditorSessionDependencies } from "../src/editor-session.js";
 
 const bytes = new Uint8Array([1, 2, 3]);
@@ -33,7 +34,7 @@ const command = (value: number, expectedRevision = 0) => ({
 const initFailure = { ok: false, error: { code: "EDITOR_DURABLE_EDITING_INIT_FAILED" } };
 const cleanups: (() => Promise<void>)[] = [];
 
-function fixture() {
+function fixture(jsonImportSequenceFloor?: () => number) {
   const databaseName = `editor-session-${Date.now()}-${Math.random()}`;
   const persistence = createIndexedDbPersistenceAdapter({ databaseName });
   const readPointers = vi.spyOn(persistence, "readPointers");
@@ -51,6 +52,7 @@ function fixture() {
   let identity = 0;
   const deps = {
     persistence, documentId: "document-1", sha256: vi.fn(sha256), decodePng,
+    jsonImportSequenceFloor,
     revisionId: vi.fn(() => `revision-${++identity}`), createdAt: vi.fn(() => 1234),
     commandId: vi.fn(() => "image-command"),
     elementIdSource: vi.fn(() => ({ kind: "id" as const, id: "image-1" })),
@@ -126,6 +128,86 @@ it("captures declared dependencies once without I/O or implicit initialization",
     expect(spy).not.toHaveBeenCalled();
   }
   expect(f.reads).toEqual(Object.keys(f.deps));
+});
+
+it("imports above a captured saved-only floor, retaining saved identity and progressing current", async () => {
+  const floor = vi.fn(() => 41);
+  const f = fixture(floor);
+  expect(floor).not.toHaveBeenCalled();
+  const saved = createCompleteRevision({ documentId: "document-1", revisionId: "saved-41",
+    sequence: 41, document: documentAt(0.2) });
+  const savedPointer = createSavedRevisionPointer(saved);
+  await f.persistence.writeCompleteRevision(saved, { saved: savedPointer, draft: null });
+  const before = await f.persistence.readPointers("document-1");
+  await expect(f.session.importWorkflow({ kind: "editable-json-import", editableJson: "{" })).rejects.toThrow();
+  expect(f.session.workspace.current).toBeNull();
+  expect(f.writeRevision).not.toHaveBeenCalled();
+  expect(await f.persistence.readPointers("document-1")).toEqual(before);
+  await expect(f.importJson()).resolves.toBeUndefined();
+  expect(floor).toHaveBeenCalledTimes(2);
+  expect(f.session.workspace.current?.revision).toMatchObject({ revisionId: "revision-1", sequence: 42 });
+  expect(await f.persistence.readPointers("document-1")).toEqual({ saved: before.saved,
+    draft: { kind: "draft", documentId: "document-1", revisionId: "revision-1", sequence: 42 } });
+  expect(await f.persistence.readRevision("document-1", "saved-41")).toEqual(saved);
+  f.deps.jsonImportSequenceFloor = () => { throw new Error("retargeted floor"); };
+  await f.importJson(documentAt(0.6));
+  expect(f.session.workspace.current?.revision.sequence).toBe(43);
+  expect(floor).toHaveBeenCalledTimes(3);
+  expect(f.reads).toEqual(Object.keys(f.deps));
+});
+
+it.each([() => -1, () => 1.5, () => NaN, () => Infinity,
+  () => Number.MAX_SAFE_INTEGER, () => { throw new Error("floor failed"); }])(
+  "fails closed for an invalid or throwing JSON floor without conditional writes", async (floor) => {
+    const f = fixture(floor);
+    const before = await f.persistence.readPointers("document-1");
+    await expect(f.importJson()).rejects.toThrow();
+    expect(f.writeRevision).not.toHaveBeenCalled();
+    expect(f.session.workspace.current).toBeNull();
+    expect(await f.persistence.readPointers("document-1")).toEqual(before);
+  },
+);
+
+it("preserves current and pointers on malformed JSON and identity faults with a floor", async () => {
+  const floor = vi.fn(() => 41);
+  const f = fixture(floor);
+  await f.importJson();
+  const current = f.session.workspace.current;
+  const before = await f.persistence.readPointers("document-1");
+  f.writeRevision.mockClear();
+  await expect(f.session.importWorkflow({ kind: "editable-json-import", editableJson: "{" })).rejects.toThrow();
+  f.deps.revisionId.mockImplementation(() => { throw new Error("identity failed"); });
+  await expect(f.importJson()).rejects.toThrow();
+  f.deps.revisionId.mockReturnValue("");
+  await expect(f.importJson()).rejects.toThrow();
+  f.deps.revisionId.mockReturnValue("bad-timestamp");
+  f.deps.createdAt.mockReturnValue(-1);
+  await expect(f.importJson()).rejects.toThrow();
+  expect(floor).toHaveBeenCalledTimes(5);
+  expect(f.writeRevision).not.toHaveBeenCalled();
+  expect(f.session.workspace.current).toBe(current);
+  expect(await f.persistence.readPointers("document-1")).toEqual(before);
+});
+
+it("rejects live-current overflow and keeps the floor out of the image route", async () => {
+  const floor = vi.fn(() => 41);
+  const f = fixture(floor);
+  await f.importJson();
+  floor.mockImplementation(() => { throw new Error("JSON only"); });
+  await expect(f.session.importWorkflow({ kind: "image-import",
+    file: new File([bytes], "particles.png", { type: "image/png" }) })).resolves.toBeUndefined();
+  expect(floor).toHaveBeenCalledTimes(1);
+  expect(f.session.workspace.current?.revision.sequence).toBe(43);
+  floor.mockReturnValue(0);
+  await f.session.workspace.publish({ documentId: "document-1", editableJson: JSON.stringify(documentAt(0.6)),
+    revisionId: () => "maximum", sequence: Number.MAX_SAFE_INTEGER, createdAt: () => 1234 });
+  const current = f.session.workspace.current;
+  const before = await f.persistence.readPointers("document-1");
+  f.writeRevision.mockClear();
+  await expect(f.importJson()).rejects.toThrow("EDITOR_JSON_IMPORT_SEQUENCE_INVALID");
+  expect(f.writeRevision).not.toHaveBeenCalled();
+  expect(f.session.workspace.current).toBe(current);
+  expect(await f.persistence.readPointers("document-1")).toEqual(before);
 });
 
 it("rejects an actually reloaded foreign current without adopting or modifying it", async () => {
