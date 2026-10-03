@@ -1,5 +1,10 @@
 import type { EditorImportStatus, EditorImportWorkflow } from "./editor-import-controls.js";
 
+export interface EditorImportActivity {
+  begin(): boolean;
+  end(): void;
+}
+
 interface JsonControlsOptions {
   readonly form: HTMLFormElement;
   readonly input: HTMLTextAreaElement;
@@ -7,17 +12,19 @@ interface JsonControlsOptions {
   readonly status: HTMLElement;
   readonly workflow: EditorImportWorkflow;
   readonly onImported: () => string;
+  readonly activity?: EditorImportActivity;
 }
 
 /** Vanilla controls over the existing workflow, without session/resource authority. */
 export function mountEditorJsonImportControls(options: JsonControlsOptions) {
-  const { form, input, button, status, workflow, onImported } = options;
+  const { form, input, button, status, workflow, onImported, activity } = options;
   let ready = false;
   let busy = false;
+  let sharedBusy = false;
   let disposed = false;
   const update = () => {
-    input.disabled = button.disabled = disposed || !ready || busy;
-    form.setAttribute("aria-busy", String(busy));
+    input.disabled = button.disabled = disposed || !ready || busy || sharedBusy;
+    form.setAttribute("aria-busy", String(busy || sharedBusy));
   };
   const report = (state: EditorImportStatus, message: string) => {
     status.dataset.importStatus = state;
@@ -25,8 +32,9 @@ export function mountEditorJsonImportControls(options: JsonControlsOptions) {
   };
   const submit = (event: Event) => {
     event.preventDefault();
-    if (disposed || !ready || busy) return;
+    if (disposed || !ready || busy || sharedBusy) return;
     const editableJson = input.value;
+    if (activity && !activity.begin()) return;
     busy = true;
     update();
     report("pending", "Import in progress.");
@@ -38,6 +46,7 @@ export function mountEditorJsonImportControls(options: JsonControlsOptions) {
         if (!disposed) report("error", "Editable JSON import failed. Check the JSON and locally stored PNG assets, then try again. If another tab changed this draft, refresh to review it.");
       } finally {
         busy = false;
+        activity?.end();
         if (!disposed) update();
       }
     })();
@@ -45,6 +54,11 @@ export function mountEditorJsonImportControls(options: JsonControlsOptions) {
   form.addEventListener("submit", submit);
   update();
   return Object.freeze({
+    setBusy(value: boolean) {
+      if (disposed) return;
+      sharedBusy = value;
+      update();
+    },
     setReady(value: boolean) {
       if (disposed) return;
       ready = value;

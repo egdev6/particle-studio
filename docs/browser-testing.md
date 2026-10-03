@@ -14,7 +14,7 @@ npm run preview   # http://127.0.0.1:4176 (build first)
 ```
 
 Both servers bind to loopback with strict ports. The production entry is a
-non-React **JSON scene editor**, with explicit JSON import controls. The fixed IndexedDB slot
+non-React **JSON scene editor**, with independent JSON and PNG import controls. The fixed IndexedDB slot
 is database `particle-studio-browser-viewer`, document `browser-document`.
 An existing draft reloads through the actual editor session, canonical verification
 and PNG hydration pipeline, rendering at its own playback start on a 256×160
@@ -27,7 +27,17 @@ referenced PNG assets must already exist locally. Controls disable during import
 with visible success or actionable failure. Saved-only imports advance above the
 startup-known saved sequence without discarding it. Failures preserve the prior
 frame/publication; stale competing-tab attempts never retry or rebase.
-There is no PNG upload, animation, autosave or seeding. `pagehide` suppresses late
+To insert a PNG, first create an editable publication with JSON (or restore a
+current draft), then select **PNG file** and placement in scene units. Visible
+x/y/width/height defaults are 0/0/64/64 with opacity 1; positions must be finite,
+sizes positive/finite. File and rectangle are captured before preparation. Both
+actions disable in the shared pending lane, including same-turn submissions;
+PNG needs no textarea JSON and JSON needs no File. Empty/saved-only state blocks
+PNG with **Import JSON first**, never silently creating a draft from the sample.
+PNG verification/decode/stale-source errors preserve documents/pointers/current
+and frame, but may leave immutable asset bytes already written. No universal
+all-stores rollback, cleanup or garbage collection is promised.
+There is no animation, autosave or seeding. `pagehide` suppresses late
 output and releases publication/cache only after owned startup/import work settles;
 it neither cancels queued publication nor closes/deletes the production database.
 Vite builds the entry but does not typecheck it; use the separate check below.
@@ -71,5 +81,11 @@ never reuses existing servers:
   sequence 41→42 with saved retention, malformed/missing-asset preservation,
   competing-tab winners before/during preparation and import disposal on resolution
   or rejection. `static-viewer.spec.ts` retains the complete startup regression matrix.
+  `png-import.spec.ts` uses real `setInputFiles` after user JSON: captured placement,
+  independent metadata/IDs/pixels and durable refresh, no-current prerequisites,
+  MIME/content/File-read/decode/asset-reread/placement failures with exact asset
+  effects, stale winners before/during preparation, and delayed PNG pagehide on
+  resolution/rejection. Fault injection patches browser APIs only, not a product
+  seed/global/fixture entry. Existing startup and JSON cases remain selected.
   Core tests focus on owned workflow settlement; distinct jsdom controls tests check
   readiness, input capture, single flight and listener removal without React.

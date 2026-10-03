@@ -1,4 +1,6 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
+import { FIRST_SLICE_DOCUMENT } from "@particle-studio/scene-document";
 import { createBrowserEditorSession } from "../src/browser-editor-session.js";
 
 const mocks = vi.hoisted(() => ({ session: vi.fn(), persistence: vi.fn() }));
@@ -6,6 +8,8 @@ vi.mock("../src/editor-session.js", () => ({ createEditorSession: mocks.session 
 vi.mock("@particle-studio/persistence-indexeddb", () => ({
   createIndexedDbPersistenceAdapter: mocks.persistence,
 }));
+
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -93,6 +97,9 @@ it("captures the validated startup floor and blocks import after startup failure
   const deps = mocks.session.mock.calls.at(-1)![0];
   expect(deps.jsonImportSequenceFloor()).toBe(0);
   await browser.start();
+  const file = new File(["png"], "sample.png", { type: "image/png" });
+  await expect(browser.importPng(file, { x: 0, y: 0, width: 64, height: 64 })).rejects.toThrow();
+  expect(importWorkflow).not.toHaveBeenCalled();
   expect(deps.jsonImportSequenceFloor()).toBe(41);
   await browser.importJson("user JSON");
   expect(readPointers).toHaveBeenCalledTimes(1);
@@ -101,8 +108,99 @@ it("captures the validated startup floor and blocks import after startup failure
   const failed = createBrowserEditorSession();
   await expect(failed.start()).rejects.toThrow("corrupt");
   await expect(failed.importJson("blocked")).rejects.toThrow();
+  await expect(failed.importPng(file, { x: 0, y: 0, width: 64, height: 64 })).rejects.toThrow();
   expect(importWorkflow).toHaveBeenCalledTimes(1);
   await failed.dispose();
+});
+
+// Real session/workflow/IDB below: only the platform bitmap boundary is substituted.
+async function pngFixture() {
+  vi.stubGlobal("indexedDB", new IDBFactory());
+  vi.stubGlobal("IDBKeyRange", IDBKeyRange);
+  const adapter = await vi.importActual<typeof import("@particle-studio/persistence-indexeddb")>("@particle-studio/persistence-indexeddb");
+  const real = await vi.importActual<typeof import("../src/editor-session.js")>("../src/editor-session.js");
+  const persistence = adapter.createIndexedDbPersistenceAdapter({ databaseName: `browser-png-${crypto.randomUUID()}` });
+  const writeAsset = vi.spyOn(persistence, "writeAsset");
+  const writeRevision = vi.spyOn(persistence, "writeCompleteRevisionIfPointersMatch");
+  const handles: { width: number; height: number; close: ReturnType<typeof vi.fn> }[] = [];
+  vi.stubGlobal("createImageBitmap", vi.fn(async () => {
+    const handle = { width: 2, height: 3, close: vi.fn() };
+    handles.push(handle);
+    return handle;
+  }));
+  mocks.persistence.mockReturnValue(persistence);
+  mocks.session.mockImplementation(real.createEditorSession);
+  const browser = createBrowserEditorSession();
+  const gate = deferred<ArrayBuffer>();
+  const file = new File([new Uint8Array([1, 2, 3])], "image.png", { type: "image/png" });
+  const read = vi.spyOn(file, "arrayBuffer").mockReturnValue(gate.promise);
+  const rectangle = { x: 12, y: 18, width: 64, height: 32 };
+  const json = JSON.stringify(FIRST_SLICE_DOCUMENT);
+  return { browser, persistence, writeAsset, writeRevision, handles, gate, file, read, rectangle, json };
+}
+
+it("guards PNG before file/asset work and captures geometry in the real shared workflow", async () => {
+  const f = await pngFixture();
+  await expect(f.browser.importPng(f.file, f.rectangle)).rejects.toThrow();
+  await f.browser.start(); // No draft: the sample is never an image source.
+  await expect(f.browser.importPng(f.file, f.rectangle)).rejects.toThrow("JSON");
+  expect(f.read).not.toHaveBeenCalled();
+  expect(f.writeAsset).not.toHaveBeenCalled();
+  const jsonFlight = f.browser.importJson(f.json);
+  await expect(f.browser.importPng(f.file, f.rectangle)).rejects.toThrow();
+  await jsonFlight;
+  const previous = f.browser.current;
+  for (const rectangle of [{ ...f.rectangle, x: NaN }, { ...f.rectangle, y: Infinity },
+    { ...f.rectangle, width: 0 }, { ...f.rectangle, height: -1 }]) {
+    await expect(f.browser.importPng(f.file, rectangle)).rejects.toThrow("PLACEMENT");
+  }
+  expect(f.read).not.toHaveBeenCalled();
+  const flight = f.browser.importPng(f.file, f.rectangle);
+  f.rectangle.x = 200; f.rectangle.width = 1;
+  await expect(f.browser.importJson("changed")).rejects.toThrow();
+  await expect(f.browser.importPng(f.file, f.rectangle)).rejects.toThrow();
+  expect(f.browser.current).toBe(previous);
+  f.gate.resolve(new Uint8Array([1, 2, 3]).buffer);
+  const current = await flight;
+  expect(current).toBe(f.browser.current);
+  expect(current?.revision.sequence).toBe(2);
+  expect(current?.revision.document.elements.at(-1)).toMatchObject({ type: "image",
+    x: 12, y: 18, width: 64, height: 32, opacity: 1,
+    asset: { mimeType: "image/png", byteLength: 3, intrinsicWidth: 2, intrinsicHeight: 3 } });
+  expect(f.read).toHaveBeenCalledTimes(1);
+  expect(f.writeAsset).toHaveBeenCalledTimes(1);
+  expect(f.writeRevision).toHaveBeenCalledTimes(2);
+  // Import stages one handle; publication verifies/decodes a distinct candidate.
+  expect(f.handles).toHaveLength(2);
+  expect(new Set(f.handles).size).toBe(2);
+  expect(current?.images).toHaveLength(1);
+  expect(current?.images[0]!.handle).toBe(f.handles[0]);
+  expect(f.handles[0]!.close).not.toHaveBeenCalled();
+  expect(f.handles[1]!.close).toHaveBeenCalledTimes(1); // Unowned duplicate.
+  await f.browser.dispose();
+  for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
+});
+
+it.each([false, true])("waits for real PNG settlement, with no late borrowed view (reject=%s)", async (reject) => {
+  const f = await pngFixture();
+  await f.browser.start();
+  await f.browser.importJson(f.json);
+  const flight = f.browser.importPng(f.file, f.rectangle);
+  const disposal = f.browser.dispose();
+  expect(f.browser.dispose()).toBe(disposal);
+  expect(f.browser.current).toBeNull();
+  expect(f.writeAsset).not.toHaveBeenCalled();
+  if (reject) f.gate.reject(new Error("file read fault"));
+  else f.gate.resolve(new Uint8Array([1, 2, 3]).buffer);
+  if (reject) await expect(flight).rejects.toThrow("FILE_READ_FAILED");
+  else await expect(flight).resolves.toBeNull();
+  await disposal;
+  expect(f.writeRevision).toHaveBeenCalledTimes(reject ? 1 : 2);
+  expect(f.handles).toHaveLength(reject ? 0 : 2);
+  expect(new Set(f.handles).size).toBe(f.handles.length);
+  for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
+  await expect(f.browser.importPng(f.file, f.rectangle)).rejects.toThrow();
+  expect(f.read).toHaveBeenCalledTimes(1);
 });
 
 it("does not start a reload after disposal during the initial pointer read", async () => {

@@ -7,12 +7,29 @@
   </head>
   <body>
     <h1>JSON scene editor</h1>
-    <p>Restores a local draft, or shows an unpersisted sample. Import editable JSON to publish a local draft.</p>
+    <p>Restores a local draft, or shows an unpersisted sample. Import editable JSON first, then insert PNG files into that draft.</p>
     <form id="json-import" aria-label="JSON import controls" aria-busy="false">
       <label for="editable-json">Editable JSON</label>
       <textarea id="editable-json" rows="8" cols="60" disabled></textarea>
       <button id="import-json" type="submit" disabled>Import editable JSON</button>
     </form>
+    <form id="png-import" aria-label="PNG import controls" aria-busy="false" novalidate>
+      <label for="png-file">PNG file</label>
+      <input id="png-file" type="file" accept="image/png" disabled />
+      <fieldset>
+        <legend>PNG placement in scene units (opacity 1)</legend>
+        <label for="png-x">PNG x</label>
+        <input id="png-x" type="number" step="any" value="0" disabled />
+        <label for="png-y">PNG y</label>
+        <input id="png-y" type="number" step="any" value="0" disabled />
+        <label for="png-width">PNG width</label>
+        <input id="png-width" type="number" step="any" value="64" disabled />
+        <label for="png-height">PNG height</label>
+        <input id="png-height" type="number" step="any" value="64" disabled />
+      </fieldset>
+      <button id="import-png" type="submit" disabled>Import PNG</button>
+    </form>
+    <p id="png-status" role="status" aria-label="PNG import status" aria-live="polite" aria-atomic="true">Loading local scene…</p>
     <p id="status" role="status">Loading local scene…</p>
     <canvas id="scene" width="256" height="160" aria-label="Current scene"></canvas>
     <script type="module" src="/src/editor-canvas-entry.ts"></script>
