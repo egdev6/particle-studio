@@ -7,7 +7,8 @@
   </head>
   <body>
     <h1>JSON scene editor</h1>
-    <p>Restores a local draft, or shows an unpersisted sample. Import editable JSON first, then insert PNG files into that draft.</p>
+    <p>Restores a local draft, or shows an unpersisted sample. Create a blank scene or import editable JSON, then insert PNG files into that draft.</p>
+    <button id="create-scene" type="button" disabled>Create blank scene</button>
     <form id="json-import" aria-label="JSON import controls" aria-busy="false">
       <label for="editable-json">Editable JSON</label>
       <textarea id="editable-json" rows="8" cols="60" disabled></textarea>

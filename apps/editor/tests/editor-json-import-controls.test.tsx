@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { mountEditorJsonImportControls } from "../src/editor-json-import-controls.js";
+import { mountEditorPngImportControls } from "../src/editor-png-import-controls.js";
 
 function deferred() {
   let resolve!: () => void;
@@ -22,6 +23,100 @@ function fixture() {
   return { form, input, button, status, pending, workflow, onImported, controls, activate };
 }
 afterEach(() => { document.body.innerHTML = ""; vi.restoreAllMocks(); });
+
+function creationFixture() {
+  const f = fixture(); f.controls.dispose();
+  const createButton = document.createElement("button");
+  createButton.textContent = "Create blank scene"; document.body.append(createButton);
+  let current = false;
+  const createScene = vi.fn(() => f.pending.promise);
+  const onCreated = vi.fn(() => { current = true; return "Rendered imported draft at 0 µs."; });
+  const pngForm = document.createElement("form");
+  pngForm.innerHTML = `<input type="file"><input value="0"><input value="0"><input value="64"><input value="64"><button>Import PNG</button>`;
+  document.body.append(pngForm);
+  const fields = pngForm.querySelectorAll("input");
+  Object.defineProperty(fields[0], "files", { value: [new File(["png"], "selected.png", { type: "image/png" })] });
+  const importPng = vi.fn(() => f.pending.promise);
+  let busy = false;
+  const activity = {
+    begin() { if (busy) return false; busy = true; controls.setBusy(true); png.setBusy(true); return true; },
+    end() { busy = false; controls.setBusy(false); png.setBusy(false); },
+  };
+  const options = { ...f, createButton, createScene, onCreated, hasCurrent: () => current, activity };
+  const controls = mountEditorJsonImportControls(options);
+  const png = mountEditorPngImportControls({ form: pngForm, input: fields[0]!, button: pngForm.querySelector("button")!,
+    rectangle: { x: fields[1]!, y: fields[2]!, width: fields[3]!, height: fields[4]! },
+    status: document.createElement("p"), importPng, onImported: f.onImported, activity });
+  const create = () => createButton.dispatchEvent(new Event("click", { cancelable: true }));
+  const activatePng = () => pngForm.dispatchEvent(new Event("submit", { cancelable: true }));
+  return { ...f, controls, createButton, createScene, onCreated, png, pngForm, importPng, create, activatePng,
+    current(value: boolean) { current = value; controls.setReady(true); png.setReady(true, value); } };
+}
+
+it.each(["create", "json", "png"])("creation shares pending state and captures no mutable inputs (%s first)", async (first) => {
+  const f = creationFixture();
+  expect(f.createButton.disabled).toBe(true); f.create();
+  expect(f.createScene).not.toHaveBeenCalled();
+  f.controls.setReady(true); f.png.setReady(true, true);
+  expect(f.createButton.disabled).toBe(false);
+  f.input.value = "captured JSON";
+  if (first === "create") f.create(); else if (first === "json") f.activate(); else f.activatePng();
+  f.input.value = "retarget";
+  f.create(); f.activate(); f.activatePng(); f.createButton.click();
+  expect(f.createButton.disabled).toBe(true); expect(f.button.disabled).toBe(true);
+  expect(f.pngForm.querySelector("button")!.disabled).toBe(true);
+  expect(f.form.getAttribute("aria-busy")).toBe("true");
+  expect(f.pngForm.getAttribute("aria-busy")).toBe("true");
+  expect(f.createScene).toHaveBeenCalledTimes(first === "create" ? 1 : 0);
+  expect(f.workflow).toHaveBeenCalledTimes(first === "json" ? 1 : 0);
+  expect(f.importPng).toHaveBeenCalledTimes(first === "png" ? 1 : 0);
+  if (first === "create") {
+    expect(f.createScene).toHaveBeenCalledExactlyOnceWith();
+    expect(f.status.textContent).toContain("progress");
+  }
+  if (first === "json") expect(f.workflow).toHaveBeenCalledExactlyOnceWith({ kind: "editable-json-import", editableJson: "captured JSON" });
+  f.pending.resolve();
+  await vi.waitFor(() => expect(f.form.getAttribute("aria-busy")).toBe("false"));
+  if (first === "create") {
+    expect(f.onCreated).toHaveBeenCalledTimes(1); expect(f.onImported).not.toHaveBeenCalled();
+    expect(f.status.textContent).toContain("Rendered imported draft at 0 µs.");
+    expect(f.createButton.disabled).toBe(true);
+  }
+  f.current(true); f.create(); expect(f.createButton.disabled).toBe(true);
+  expect(f.button.disabled).toBe(false); // Creation-only guard must not block replacement JSON.
+  f.controls.setReady(false); f.create(); expect(f.createButton.disabled).toBe(true);
+  f.controls.dispose(); f.png.dispose();
+});
+
+it.each([false, true])("creation owns exact listeners and freezes late resolve/reject output (reject=%s)", async (reject) => {
+  const f = creationFixture();
+  const formRemove = vi.spyOn(f.form, "removeEventListener");
+  const buttonRemove = vi.spyOn(f.createButton, "removeEventListener");
+  f.controls.setReady(true); f.create();
+  expect(f.createScene).toHaveBeenCalledTimes(1);
+  f.controls.dispose(); f.controls.dispose(); f.png.dispose();
+  expect(formRemove).toHaveBeenCalledExactlyOnceWith("submit", expect.any(Function));
+  expect(buttonRemove).toHaveBeenCalledExactlyOnceWith("click", expect.any(Function));
+  const markup = document.body.innerHTML;
+  if (reject) f.pending.reject(new Error("late create failure")); else f.pending.resolve();
+  await f.pending.promise.catch(() => undefined); await Promise.resolve();
+  f.controls.setReady(true); f.controls.setBusy(false); f.create(); f.activate();
+  expect(document.body.innerHTML).toBe(markup);
+  expect(f.onCreated).not.toHaveBeenCalled(); expect(f.onImported).not.toHaveBeenCalled();
+  expect(f.createScene).toHaveBeenCalledTimes(1); expect(f.workflow).not.toHaveBeenCalled();
+});
+
+it("creation failure is actionable and preserves the no-current controls for explicit retry", async () => {
+  const f = creationFixture(); f.controls.setReady(true); f.create();
+  expect(f.createScene).toHaveBeenCalledTimes(1);
+  f.pending.reject(new Error("CAS failed"));
+  await vi.waitFor(() => expect(f.status.dataset.importStatus).toBe("error"));
+  expect(f.status.textContent).toContain("refresh"); expect(f.status.textContent).toContain("try again");
+  expect(f.onCreated).not.toHaveBeenCalled(); expect(f.createButton.disabled).toBe(false);
+  f.createScene.mockResolvedValueOnce(undefined); f.create();
+  await vi.waitFor(() => expect(f.onCreated).toHaveBeenCalledTimes(1));
+  expect(f.createScene).toHaveBeenCalledTimes(2); f.controls.dispose(); f.png.dispose();
+});
 
 it("blocks startup/corrupt/context-unavailable readiness and captures JSON once at activation", async () => {
   const f = fixture();

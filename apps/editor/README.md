@@ -30,7 +30,14 @@ sequence floor permits saved-only imports while retaining saved rows; only JSON
 sequencing uses it. Malformed JSON, missing assets and stale competing-tab writes
 preserve the previous usable frame/publication. Errors require another explicit
 activation, never a retry/reload/rebase. There is no animation or autosave.
-PNG insertion requires a genuine current editable publication: **Import JSON first**
+**Create blank scene** is an explicit no-input action after healthy empty/saved-only
+startup. It publishes immutable editor-local JSON through the existing JSON flight:
+1,000,000 µs, range 0–1,000,000, loop true, seed 42, no tracks, and one empty
+structural root group (no drawable geometry). Saved sequence 41 advances to draft
+42 while retaining saved records. It does not promote the sample or replace a
+current publication; both the button and facade guard existing current state.
+Creation shares JSON/PNG activity, status and settlement-aware disposal.
+PNG insertion requires a genuine current editable publication: **Create a scene or import JSON**
 in empty/saved-only state. The sample is never converted or seeded. Choose a File
 and visible x/y/width/height in scene units (defaults 0/0/64/64, opacity 1).
 Positions must be finite and sizes positive/finite. The facade captures placement;

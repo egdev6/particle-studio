@@ -120,6 +120,7 @@ async function pngFixture() {
   const adapter = await vi.importActual<typeof import("@particle-studio/persistence-indexeddb")>("@particle-studio/persistence-indexeddb");
   const real = await vi.importActual<typeof import("../src/editor-session.js")>("../src/editor-session.js");
   const persistence = adapter.createIndexedDbPersistenceAdapter({ databaseName: `browser-png-${crypto.randomUUID()}` });
+  const readPointers = vi.spyOn(persistence, "readPointers");
   const writeAsset = vi.spyOn(persistence, "writeAsset");
   const writeRevision = vi.spyOn(persistence, "writeCompleteRevisionIfPointersMatch");
   const handles: { width: number; height: number; close: ReturnType<typeof vi.fn> }[] = [];
@@ -136,7 +137,7 @@ async function pngFixture() {
   const read = vi.spyOn(file, "arrayBuffer").mockReturnValue(gate.promise);
   const rectangle = { x: 12, y: 18, width: 64, height: 32 };
   const json = JSON.stringify(FIRST_SLICE_DOCUMENT);
-  return { browser, persistence, writeAsset, writeRevision, handles, gate, file, read, rectangle, json };
+  return { browser, persistence, readPointers, writeAsset, writeRevision, handles, gate, file, read, rectangle, json };
 }
 
 it("guards PNG before file/asset work and captures geometry in the real shared workflow", async () => {
@@ -201,6 +202,91 @@ it.each([false, true])("waits for real PNG settlement, with no late borrowed vie
   for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
   await expect(f.browser.importPng(f.file, f.rectangle)).rejects.toThrow();
   expect(f.read).toHaveBeenCalledTimes(1);
+});
+
+const blankDocument = { schemaVersion: 1, durationUs: 1_000_000,
+  playbackRange: { startUs: 0, endUs: 1_000_000 }, loop: true, seed: 42,
+  tracks: [], rootIds: ["root"], elements: [{ id: "root", type: "group", childrenIds: [] }] };
+
+it.each([false, true])("creates an exact canonical blank through the real workflow (saved-only=%s)", async (saved) => {
+  const f = await pngFixture();
+  if (saved) {
+    const { createCompleteRevision, createSavedRevisionPointer } = await import("@particle-studio/persistence");
+    const row = createCompleteRevision({ documentId: "browser-document", revisionId: "saved-41",
+      sequence: 41, document: FIRST_SLICE_DOCUMENT });
+    await f.persistence.writeCompleteRevision(row, { saved: createSavedRevisionPointer(row), draft: null });
+  }
+  await expect(f.browser.createScene()).rejects.toThrow();
+  expect(f.readPointers).not.toHaveBeenCalled(); expect(f.writeRevision).not.toHaveBeenCalled();
+  await f.browser.start();
+  const before = await f.persistence.readPointers("browser-document");
+  expect(f.browser.current).toBeNull();
+  const flight = f.browser.createScene();
+  await expect(f.browser.createScene()).rejects.toThrow();
+  await expect(f.browser.importJson(f.json)).rejects.toThrow();
+  await expect(f.browser.importPng(f.file, f.rectangle)).rejects.toThrow();
+  const current = await flight;
+  expect(current).toBe(f.browser.current);
+  expect(current?.revision.document).toEqual(blankDocument);
+  expect(current?.revision.sequence).toBe(saved ? 42 : 1);
+  expect(current?.images).toEqual([]);
+  const pointers = await f.persistence.readPointers("browser-document");
+  expect(pointers.saved).toEqual(before.saved);
+  expect(pointers.draft).toMatchObject({ revisionId: current!.revision.revisionId, sequence: saved ? 42 : 1 });
+  expect(await f.persistence.readRevision("browser-document", current!.revision.revisionId)).toEqual(current!.revision);
+  if (saved) expect(await f.persistence.readRevision("browser-document", "saved-41")).toMatchObject({ sequence: 41, document: FIRST_SLICE_DOCUMENT });
+  const reads = f.readPointers.mock.calls.length;
+  const ids = vi.spyOn(crypto, "randomUUID");
+  await expect(f.browser.createScene()).rejects.toThrow();
+  expect(ids).not.toHaveBeenCalled(); expect(f.readPointers).toHaveBeenCalledTimes(reads);
+  expect(f.browser.current).toBe(current);
+  expect(f.writeRevision).toHaveBeenCalledTimes(1);
+  expect(f.writeAsset).not.toHaveBeenCalled();
+  expect(f.read).not.toHaveBeenCalled();
+  expect(f.handles).toEqual([]);
+  await f.browser.dispose();
+  await expect(f.browser.createScene()).rejects.toThrow();
+});
+
+it.each([false, true])("creation owns shared workflow settlement, not cancellation (reject=%s)", async (reject) => {
+  const pending = deferred<unknown>();
+  const release = vi.fn(); const clear = vi.fn();
+  const workspace: { current: unknown } = { current: null };
+  const importWorkflow = vi.fn(async (_request: { kind: string; editableJson: string }) => {
+    await pending.promise;
+    workspace.current = { revision: { document: blankDocument }, workspace: { images: [] }, release };
+  });
+  const readPointers = vi.fn(async () => ({ saved: null, draft: null }));
+  mocks.persistence.mockReturnValue({ readPointers });
+  mocks.session.mockReturnValue({ workspace, cache: { clear }, importWorkflow });
+  const browser = createBrowserEditorSession(); await browser.start();
+  const flight = browser.createScene();
+  expect(importWorkflow).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(importWorkflow.mock.calls[0]![0].editableJson)).toEqual(blankDocument);
+  await expect(browser.importJson("retarget")).rejects.toThrow();
+  const disposal = browser.dispose();
+  expect(browser.dispose()).toBe(disposal);
+  expect(clear).not.toHaveBeenCalled(); expect(release).not.toHaveBeenCalled();
+  if (reject) pending.reject(new Error("preparation failed")); else pending.resolve(undefined);
+  if (reject) await expect(flight).rejects.toThrow("preparation failed");
+  else await expect(flight).resolves.toBeNull();
+  await disposal;
+  expect(browser.current).toBeNull();
+  expect(clear).toHaveBeenCalledTimes(1); expect(release).toHaveBeenCalledTimes(reject ? 0 : 1);
+  expect(readPointers).toHaveBeenCalledTimes(1);
+});
+
+it("rejects creation after failed startup and during a JSON flight before entering workflow", async () => {
+  const f = await pngFixture(); await f.browser.start();
+  const flight = f.browser.importJson(f.json);
+  await expect(f.browser.createScene()).rejects.toThrow(); await flight;
+  await f.browser.dispose();
+  f.readPointers.mockRejectedValueOnce(new Error("corrupt"));
+  const failed = createBrowserEditorSession();
+  await expect(failed.start()).rejects.toThrow("corrupt");
+  await expect(failed.createScene()).rejects.toThrow();
+  expect(f.writeRevision).toHaveBeenCalledTimes(1);
+  await failed.dispose();
 });
 
 it("does not start a reload after disposal during the initial pointer read", async () => {
