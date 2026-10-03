@@ -33,7 +33,7 @@ async function pixels(page: Page) {
 async function open(page: Page) {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "JSON scene editor" })).toBeVisible();
-  await expect(page.getByRole("status")).toHaveText("Rendered unpersisted sample at 0 µs.");
+  await expect(page.getByRole("status", { name: "", exact: true })).toHaveText("Rendered unpersisted sample at 0 µs.");
   await expect(page.getByRole("button", { name: "Import editable JSON" })).toBeEnabled();
 }
 async function importJson(page: Page, json: string) {
@@ -42,7 +42,7 @@ async function importJson(page: Page, json: string) {
 }
 async function publish(page: Page, document: SceneDocumentV1) {
   await importJson(page, JSON.stringify(document));
-  await expect(page.getByRole("status")).toHaveText(`Import complete. Rendered imported draft at ${document.playbackRange.startUs} µs.`);
+  await expect(page.getByRole("status", { name: "", exact: true })).toHaveText(`Import complete. Rendered imported draft at ${document.playbackRange.startUs} µs.`);
 }
 async function delayedDecode(page: Page, reject: boolean) {
   await page.addInitScript((reject) => {
@@ -90,7 +90,7 @@ test("first and replacement imports hydrate genuine PNG, render playback start a
   expect(frame[0]![3]).toBeLessThanOrEqual(160);
   expect(frame.slice(1)).toEqual([[0, 0, 0, 255], [0, 0, 0, 0]]);
   await page.reload();
-  await expect(page.getByRole("status")).toHaveText("Rendered restored draft at 750000 µs.");
+  await expect(page.getByRole("status", { name: "", exact: true })).toHaveText("Rendered restored draft at 750000 µs.");
   expect(await nativeRows(page)).toEqual(replaced);
   expect(await pixels(page)).toEqual(frame);
   expect(errors).toEqual([]);
@@ -102,7 +102,7 @@ test("saved-only sequence 41 stays unpersisted until user import, then retains s
   const before = await nativeRows(page, { revisions: [saved], assets: [asset],
     pointers: [{ documentId: BROWSER_DOCUMENT, saved: pointer("saved-41", 41, "saved"), draft: null }] });
   await page.reload();
-  await expect(page.getByRole("status")).toHaveText("Rendered unpersisted sample at 0 µs.");
+  await expect(page.getByRole("status", { name: "", exact: true })).toHaveText("Rendered unpersisted sample at 0 µs.");
   expect(await nativeRows(page)).toEqual(before);
   await publish(page, scene());
   const after = await nativeRows(page);
@@ -113,7 +113,7 @@ test("saved-only sequence 41 stays unpersisted until user import, then retains s
     saved: pointer("saved-41", 41, "saved"), draft: pointer(imported.revisionId, 42) }]);
   expect(await pixels(page)).toEqual([[0, 0, 0, 128], [0, 0, 0, 255], [0, 0, 0, 0]]);
   await page.reload();
-  await expect(page.getByRole("status")).toHaveText("Rendered restored draft at 500000 µs.");
+  await expect(page.getByRole("status", { name: "", exact: true })).toHaveText("Rendered restored draft at 500000 µs.");
   expect(await nativeRows(page)).toEqual(after);
 });
 
@@ -127,7 +127,7 @@ test("malformed JSON and missing local PNG preserve previous canvas and durable 
   (missing.elements[1] as Extract<SceneDocumentV1["elements"][number], { type: "image" }>).asset.sha256 = `sha256:${"0".repeat(64)}`;
   for (const json of ["{", JSON.stringify(missing)]) {
     await importJson(page, json);
-    await expect(page.getByRole("status")).toContainText("Editable JSON import failed.");
+    await expect(page.getByRole("status", { name: "", exact: true })).toContainText("Editable JSON import failed.");
     await expect(page.getByRole("button", { name: "Import editable JSON" })).toBeEnabled();
     expect(await nativeRows(page)).toEqual(before);
     expect(await pixels(page)).toEqual(frame);
@@ -148,7 +148,7 @@ for (const during of [false, true]) {
     const frame = await pixels(page);
     const other = await context.newPage();
     await other.goto("/");
-    await expect(other.getByRole("status")).toContainText("Rendered restored draft");
+    await expect(other.getByRole("status", { name: "", exact: true })).toContainText("Rendered restored draft");
     if (during) {
       await importJson(page, JSON.stringify(scene(750_000)));
       await expect(page.locator("html")).toHaveAttribute("data-decode", "pending");
@@ -158,13 +158,13 @@ for (const during of [false, true]) {
     const winner = await nativeRows(other);
     if (during) await page.locator("html").evaluate((root) => { (root as HTMLElement).dataset.settle = "yes"; });
     else await importJson(page, JSON.stringify(scene(750_000)));
-    await expect(page.getByRole("status")).toContainText("Editable JSON import failed.");
+    await expect(page.getByRole("status", { name: "", exact: true })).toContainText("Editable JSON import failed.");
     expect(await nativeRows(page)).toEqual(winner);
     expect(await pixels(page)).toEqual(frame);
     await expect(page.getByRole("button", { name: "Import editable JSON" })).toBeEnabled();
     // A later explicit action still has the old local source, not an adopted winner.
     await importJson(page, JSON.stringify(scene(750_000)));
-    await expect(page.getByRole("status")).toContainText("Editable JSON import failed.");
+    await expect(page.getByRole("status", { name: "", exact: true })).toContainText("Editable JSON import failed.");
     expect(await nativeRows(page)).toEqual(winner);
     expect(await pixels(page)).toEqual(frame);
     await other.close();
@@ -188,7 +188,7 @@ for (const reject of [false, true]) {
     expect(await nativeRows(page)).toEqual(before);
     await page.locator("html").evaluate((root) => { (root as HTMLElement).dataset.settle = "yes"; });
     await expect(page.locator("html")).toHaveAttribute("data-closes", "1");
-    await expect(page.getByRole("status")).toHaveText("Import in progress.");
+    await expect(page.getByRole("status", { name: "", exact: true })).toHaveText("Import in progress.");
     await expect(page.getByRole("form", { name: "JSON import controls" })).toHaveAttribute("aria-busy", "true");
     expect(await pixels(page)).toEqual(frame);
     const settled = await nativeRows(page);

@@ -7,11 +7,11 @@ test("built preview renders the first-slice scene at playback start", async ({ p
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "JSON scene editor" })).toBeVisible();
-  await expect(page.getByRole("status")).toHaveText("Rendered unpersisted sample at 0 µs.");
+  await expect(page.getByRole("status", { name: "", exact: true })).toHaveText("Rendered unpersisted sample at 0 µs.");
   const before = await nativeRows(page);
   expect(Object.values(before).every((rows) => Array.isArray(rows) && rows.length === 0)).toBe(true);
   await page.reload();
-  await expect(page.getByRole("status")).toHaveText("Rendered unpersisted sample at 0 µs.");
+  await expect(page.getByRole("status", { name: "", exact: true })).toHaveText("Rendered unpersisted sample at 0 µs.");
   expect(await nativeRows(page)).toEqual(before);
   const pixels = await page.locator("#scene").evaluate((element: HTMLCanvasElement) => {
     const context = element.getContext("2d")!;
@@ -34,10 +34,11 @@ test("unavailable Canvas2D context reports an error, not a rendered scene", asyn
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.addInitScript(() => { HTMLCanvasElement.prototype.getContext = () => null; });
   await page.goto("/");
-  await expect(page.getByRole("status")).toHaveText("Error: Canvas2D context is unavailable.");
-  await expect(page.getByRole("status")).toBeVisible();
-  await expect(page.getByRole("status")).not.toContainText("Rendered");
+  await expect(page.getByRole("status", { name: "", exact: true })).toHaveText("Error: Canvas2D context is unavailable.");
+  await expect(page.getByRole("status", { name: "", exact: true })).toBeVisible();
+  await expect(page.getByRole("status", { name: "", exact: true })).not.toContainText("Rendered");
   await expect(page.getByRole("button", { name: "Import editable JSON" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Import PNG", exact: true })).toBeDisabled();
   expect(pageErrors).toEqual([]);
 });
 
@@ -49,7 +50,7 @@ const cases = ["saved-only", "draft-image", "dangling", "corrupt-pointer", "corr
 for (const scenario of cases) {
   test(`built preview ${scenario} preserves actual durable rows`, async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByRole("status")).toContainText("Rendered");
+    await expect(page.getByRole("status", { name: "", exact: true })).toContainText("Rendered");
     const bytes = scenario === "decode-failure" ? [1, 2, 3] : Array.from(atob(PNG), (char) => char.charCodeAt(0));
     const hash = scenario === "decode-failure"
       ? `sha256:${Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes))),
@@ -100,7 +101,7 @@ for (const scenario of cases) {
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.reload();
-    const status = page.getByRole("status");
+    const status = page.getByRole("status", { name: "", exact: true });
     if (saved) await expect(status).toHaveText("Rendered unpersisted sample at 0 µs.");
     else if (scenario === "draft-image") {
       await expect(status).toHaveText("Rendered restored draft at 500000 µs.");
@@ -114,6 +115,7 @@ for (const scenario of cases) {
       await expect(status).toBeVisible();
       await expect(status).not.toContainText("Rendered");
       await expect(page.getByRole("button", { name: "Import editable JSON" })).toBeDisabled();
+      await expect(page.getByRole("button", { name: "Import PNG", exact: true })).toBeDisabled();
       const alpha = await page.locator("#scene").evaluate((canvas: HTMLCanvasElement) =>
         Array.from(canvas.getContext("2d")!.getImageData(0, 0, 256, 160).data).filter((_value, index) => index % 4 === 3));
       expect(alpha.every((value) => value === 0)).toBe(true);
