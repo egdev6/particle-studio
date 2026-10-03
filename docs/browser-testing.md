@@ -1,11 +1,11 @@
-# Read-only scene viewer and browser tests
+# JSON scene editor and browser tests
 
 Run from the repository root with Node 24.20.x, npm 12.0.2, workspace
 dependencies installed, and Playwright's Chromium available. For a fresh browser
 cache, provision it separately with `npx playwright install chromium`; on Linux
 CI, `npx playwright install --with-deps chromium` also installs system libraries.
 
-## Run the read-only viewer
+## Run the JSON editor
 
 ```sh
 npm run dev       # http://127.0.0.1:4173
@@ -14,17 +14,22 @@ npm run preview   # http://127.0.0.1:4176 (build first)
 ```
 
 Both servers bind to loopback with strict ports. The production entry is a
-non-React **Read-only scene viewer**, not a full editor. The fixed IndexedDB slot
+non-React **JSON scene editor**, with explicit JSON import controls. The fixed IndexedDB slot
 is database `particle-studio-browser-viewer`, document `browser-document`.
 An existing draft reloads through the actual editor session, canonical verification
 and PNG hydration pipeline, rendering at its own playback start on a 256×160
 canvas. Empty or valid saved-only state shows `FIRST_SLICE_DOCUMENT` at 0 µs,
 clearly labeled unpersisted, without fabricating a draft. Failures show a visible
 error, preserve stored rows and never reset or fall back to sample success.
-Schema initialization is permitted; durable content/pointer/asset writes are not.
-There is no editing, animation, seeding or import UI. `pagehide` suppresses late
-output and releases publication/cache only after owned startup work settles;
-it neither cancels queued reload nor closes/deletes the production database.
+Startup permits schema initialization but never writes durable content records.
+After successful startup, submit **Editable JSON** to publish a durable draft;
+referenced PNG assets must already exist locally. Controls disable during import,
+with visible success or actionable failure. Saved-only imports advance above the
+startup-known saved sequence without discarding it. Failures preserve the prior
+frame/publication; stale competing-tab attempts never retry or rebase.
+There is no PNG upload, animation, autosave or seeding. `pagehide` suppresses late
+output and releases publication/cache only after owned startup/import work settles;
+it neither cancels queued publication nor closes/deletes the production database.
 Vite builds the entry but does not typecheck it; use the separate check below.
 
 ## Verify browser behavior
@@ -61,4 +66,10 @@ never reuses existing servers:
   Sample pixels, context-unavailable errors and absence of uncaught page errors
   remain covered. Delaying actual ImageBitmap decode across repeated `pagehide`
   proves no late frame/status and exactly one handle close after settlement.
-  Core tests focus on delayed disposal, not a duplicate IDB matrix.
+  `durable-import.spec.ts` also proves first/replacement user imports, nonzero-time
+  genuine PNG rendering, revision/pointer identity and refresh restoration, saved-only
+  sequence 41→42 with saved retention, malformed/missing-asset preservation,
+  competing-tab winners before/during preparation and import disposal on resolution
+  or rejection. `static-viewer.spec.ts` retains the complete startup regression matrix.
+  Core tests focus on owned workflow settlement; distinct jsdom controls tests check
+  readiness, input capture, single flight and listener removal without React.

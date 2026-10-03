@@ -6,7 +6,7 @@ test("built preview renders the first-slice scene at playback start", async ({ p
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Read-only scene viewer" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "JSON scene editor" })).toBeVisible();
   await expect(page.getByRole("status")).toHaveText("Rendered unpersisted sample at 0 µs.");
   const before = await nativeRows(page);
   expect(Object.values(before).every((rows) => Array.isArray(rows) && rows.length === 0)).toBe(true);
@@ -37,6 +37,7 @@ test("unavailable Canvas2D context reports an error, not a rendered scene", asyn
   await expect(page.getByRole("status")).toHaveText("Error: Canvas2D context is unavailable.");
   await expect(page.getByRole("status")).toBeVisible();
   await expect(page.getByRole("status")).not.toContainText("Rendered");
+  await expect(page.getByRole("button", { name: "Import editable JSON" })).toBeDisabled();
   expect(pageErrors).toEqual([]);
 });
 
@@ -112,6 +113,7 @@ for (const scenario of cases) {
       await expect(status).toContainText("Error:");
       await expect(status).toBeVisible();
       await expect(status).not.toContainText("Rendered");
+      await expect(page.getByRole("button", { name: "Import editable JSON" })).toBeDisabled();
       const alpha = await page.locator("#scene").evaluate((canvas: HTMLCanvasElement) =>
         Array.from(canvas.getContext("2d")!.getImageData(0, 0, 256, 160).data).filter((_value, index) => index % 4 === 3));
       expect(alpha.every((value) => value === 0)).toBe(true);
@@ -136,6 +138,7 @@ for (const scenario of cases) {
       });
       await page.reload();
       await expect(page.locator("html")).toHaveAttribute("data-decode", "pending");
+      await expect(page.getByRole("button", { name: "Import editable JSON" })).toBeDisabled();
       await page.evaluate(() => {
         window.dispatchEvent(new Event("pagehide"));
         window.dispatchEvent(new Event("pagehide"));
