@@ -10,7 +10,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      testMatch: "browser-platform.spec.ts",
+      testMatch: ["browser-platform.spec.ts", "editor-frame.spec.ts"],
       use: { browserName: "chromium", baseURL: "http://127.0.0.1:4175" },
     },
     {
