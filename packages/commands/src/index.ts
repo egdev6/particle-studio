@@ -39,6 +39,12 @@ type SetKeyframeValuePayload = {
   readonly keyframeId: string;
   readonly value: number;
 };
+type SetShapePositionPayload = {
+  readonly type: "set-shape-position";
+  readonly elementId: string;
+  readonly x: number;
+  readonly y: number;
+};
 type CreateElementPayload = {
   readonly type: "create-element";
   readonly element: Record<string, unknown>;
@@ -86,6 +92,7 @@ type TimelinePayload = {
 };
 type Payload =
   | SetKeyframeValuePayload
+  | SetShapePositionPayload
   | TimelinePayload
   | CreateElementPayload
   | RemoveElementPayload
@@ -162,6 +169,21 @@ function parse(command: unknown): Payload | ErrorCode {
     !isRecord(command.payload)
   ) {
     return "MALFORMED_COMMAND";
+  }
+  if (command.payload.type === "set-shape-position") {
+    const payload = command.payload;
+    if (
+      command.actorCapability !== "human-ui" ||
+      !hasExactKeys(payload, ["type", "elementId", "x", "y"]) ||
+      !isId(payload.elementId) ||
+      typeof payload.x !== "number" ||
+      !Number.isFinite(payload.x) ||
+      typeof payload.y !== "number" ||
+      !Number.isFinite(payload.y)
+    ) {
+      return "MALFORMED_COMMAND";
+    }
+    return payload as SetShapePositionPayload;
   }
   if (command.payload.type === "set-keyframe-value") {
     if (
@@ -370,6 +392,8 @@ class Session implements CommandSession {
     if (payload.type === "group-elements") return this.group(payload);
     if (payload.type === "ungroup-element") return this.ungroup(payload);
     if (payload.type === "reparent-element") return this.reparent(payload);
+    if (payload.type === "set-shape-position")
+      return this.setShapePosition(payload);
     if (payload.type !== "set-keyframe-value") return this.timeline(payload);
 
     const track = this.document.tracks.find(
@@ -391,6 +415,33 @@ class Session implements CommandSession {
             keyframeId(payload.trackId, item.timeUs) === payload.keyframeId,
         );
         if (nextKeyframe) nextKeyframe.value = payload.value;
+      },
+    );
+    const validation = validateSceneDocument(candidate);
+    if (!validation.ok) return error("INVALID_CANDIDATE");
+    this.document = validation.value;
+    this.#revision += 1;
+    this.#undo.push({ forward, inverse });
+    this.#redo = [];
+    return this.result();
+  }
+
+  private setShapePosition(payload: SetShapePositionPayload): Result {
+    const target = this.document.elements.find(
+      (element) => element.id === payload.elementId,
+    );
+    if (!target) return error("TARGET_NOT_FOUND");
+    if (target.type !== "shape") return error("INVALID_CANDIDATE");
+
+    const [candidate, forward, inverse] = produceWithPatches(
+      this.document,
+      (draft) => {
+        const shape = draft.elements.find(
+          (element) => element.id === payload.elementId,
+        );
+        if (!shape || shape.type !== "shape") return;
+        shape.x = payload.x;
+        shape.y = payload.y;
       },
     );
     const validation = validateSceneDocument(candidate);
