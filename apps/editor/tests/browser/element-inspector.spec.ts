@@ -10,6 +10,13 @@ const select = (page: Page) => page.getByRole("combobox", { name: "Scene element
 const details = (page: Page) => page.getByLabel("Published element JSON", { exact: true });
 const status = (page: Page) => page.getByRole("status", { name: "Element inspection status", exact: true });
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
+async function positionDisabled(page: Page) {
+  await expect(button(page, "Apply position")).toBeDisabled();
+  await expect(page.getByLabel("Position X", { exact: true })).toBeDisabled();
+  await expect(page.getByLabel("Position Y", { exact: true })).toBeDisabled();
+  await button(page, "Apply position").dispatchEvent("click");
+  await page.locator("#shape-position").dispatchEvent("submit");
+}
 const blank = (): SceneDocumentV1 => ({ schemaVersion: 1, durationUs: 1_000_000, seed: 42, loop: true,
   playbackRange: { startUs: 0, endUs: 1_000_000 }, tracks: [], rootIds: ["root"],
   elements: [{ id: "root", type: "group", childrenIds: [] }] });
@@ -277,6 +284,7 @@ for (const gate of ["absent", "saved-only", "corrupt", "context", "pending"] as 
     if (gate === "pending") await instrument(page, true);
     if (gate === "context" || gate === "pending") {
       await page.goto("/"); await expect(select(page)).toBeDisabled();
+      await positionDisabled(page);
       if (gate === "context") {
         await expect(page.locator("#status")).toContainText("Error:");
         expect(await page.evaluate(() => indexedDB.databases())).toEqual([]);
@@ -298,6 +306,7 @@ for (const gate of ["absent", "saved-only", "corrupt", "context", "pending"] as 
       await page.reload(); await expect(page.locator("#status")).toContainText(gate === "corrupt" ? "Error:" : "sample");
     }
     const before = await nativeRows(page); await expect(select(page)).toBeDisabled();
+    await positionDisabled(page);
     await select(page).dispatchEvent("change"); await expect(details(page)).toHaveText("");
     expect(await nativeRows(page)).toEqual(before);
   });

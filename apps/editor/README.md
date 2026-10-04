@@ -19,11 +19,11 @@ The production entry is a vanilla durable JSON editor with PNG insertion. `brows
 composes the actual IndexedDB adapter, browser SHA-256/PNG primitives and editor
 session for the fixed local database `particle-studio-browser-viewer` and document
 `browser-document`. Dependencies are captured at construction without I/O;
-startup owns a bounded flight; JSON, creation, PNG and rectangle actions share one owned flight. Empty and valid saved-only slots show an
+startup owns a bounded flight; JSON, creation, PNG, rectangle and position actions share one owned flight. Empty and valid saved-only slots show an
 explicitly **unpersisted sample**, without creating a draft. Existing drafts reload
 verified canonical content and PNGs, then render at their own playback start.
 Startup failures block import: no reset, deletion, seed or fallback success.
-Accessible independent JSON/PNG/rectangle controls capture input once; all disable during shared work.
+Accessible independent JSON/PNG/rectangle/position controls capture input once; all disable during shared work.
 User imports publish through the existing workflow, hydrate locally stored PNG
 references and render the current publication at its playback start. A startup-known
 sequence floor permits saved-only imports while retaining saved rows; only JSON
@@ -65,7 +65,7 @@ JSON retains its startup floor. Rectangle creation writes no asset bytes, but
 canonical prehydration still rereads/redecodes referenced PNGs: duplicate handles
 close once while retained handles stay renderable through publication replacement.
 Named rectangle status preserves the unique unnamed primary canvas status.
-All four actions share the facade's authoritative lane and UI activity. Preparation,
+All five actions share the facade's authoritative lane and UI activity. Preparation,
 image hydration and stale-source failures preserve the prior publication/frame and
 appropriate durable rows; there is no automatic retry/rebase or native-draw rollback.
 Schema initialization is allowed; startup never writes durable content records.
@@ -89,17 +89,48 @@ reused; same-source refresh or rejected work retains a still-valid selection.
 Reload restores the durable scene/pixels but clears selection. Healthy ready startup
 and a genuine current are required; empty/saved-only users must Create blank scene
 or import JSON. Pending, failed startup, unavailable context and disposal disable it.
-All four existing actions disable selection in their shared lane; named inspector
+All five actions disable selection in their shared lane; named inspector
 feedback identifies retained detail's previous publication while pending. Settlement
 refreshes actual current even after publication succeeded but rendering failed.
-The inspector borrows metadata only: no new command/session API, persistence,
+The inspector borrows metadata only: its frozen `getSelection()` token contains
+only documentId/revisionId/elementId, retaining valid identity while busy but no
+action permission. Optional notifications signal meaningful selection/source
+changes, not every busy refresh. Inspection performs no persistence,
 asset I/O, runtime evaluation, painting, bitmap lookup/decode/close or resource
 ownership. Pagehide removes its sole change listener once and freezes late updates.
-No canvas picking/highlights, editing, undo or timeline controls are added.
+No canvas picking/highlights, drag editing, undo or timeline controls are added.
 
 `editor-element-inspector.test.tsx` covers the DOM/identity/lifetime contract;
 `browser/element-inspector.spec.ts` exercises real production publications and
 inspection-only native-row, pixel and per-bitmap zero-effect comparisons.
+
+## Edit selected shape position
+
+Choose a published **shape**, then edit **Position X** and **Position Y** and use
+**Apply position**. Values are authored/local even for transformed nested shapes,
+not world coordinates, evaluated tracks or unsent Editable JSON. Both axes apply
+atomically; trimmed-empty/nonfinite values fail, while negative/fractional values
+are valid. Every other element variant remains inspectable with disabled fields.
+
+`EditorSession.setShapePosition({documentId, revisionId, elementId, x, y})` and its
+browser mirror capture source and values once. Live source, shape, finite axes and
+sequence room are checked before IDs/time/I/O. A fresh human-UI bridge dispatches
+`set-shape-position` at command revision 0 with no element-ID allocation. Durable
+publication uses selected expectedSource, source.sequence+1 and the existing CAS.
+It preserves all fields except X/Y and does not write asset bytes or rebase.
+
+Equal coordinates still publish a new durable revision/sequence/pointer. Any new
+publication clears selection even with a stable element ID: explicitly reselect
+to edit again. Same-source rejection retains selection and typed input. Named
+**Position status** distinguishes publication followed by rendering failure from
+rejected editing; settlement refreshes inspection from actual current either way.
+Position controls dispose before the inspector; late DOM work stays inert while
+the existing browser owner waits for work before releasing image resources.
+
+`editor-position-controls.test.tsx` covers metadata/input/callback contracts;
+`browser/set-shape-position.spec.ts` covers production root/nested pixels, canonical
+history/reload, real PNG handle ownership, five-action exclusion, native CAS
+winners and resolving/rejecting pagehide. Startup gates remain in the inspector spec.
 
 Run `npm run validator:prepare` before
 `npx vitest run --project core apps/editor/tests/editor-frame.test.ts`.

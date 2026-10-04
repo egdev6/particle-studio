@@ -4,25 +4,29 @@ import { mountEditorJsonImportControls, type EditorImportActivity } from "./edit
 import { mountEditorPngImportControls } from "./editor-png-import-controls.js";
 import { mountEditorRectangleControls } from "./editor-rectangle-controls.js";
 import { mountEditorElementInspector } from "./editor-element-inspector.js";
+import { mountEditorPositionControls } from "./editor-position-controls.js";
 import { renderEditorFrame } from "./editor-frame.js";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#scene")!;
 const status = document.querySelector<HTMLElement>("#status")!;
 const pngStatus = document.querySelector<HTMLElement>("#png-status")!;
 const browser = createBrowserEditorSession();
+let positionControls: ReturnType<typeof mountEditorPositionControls> | undefined;
 const inspector = mountEditorElementInspector({
   select: document.querySelector<HTMLSelectElement>("#scene-element")!,
   details: document.querySelector<HTMLElement>("#element-details")!,
   status: document.querySelector<HTMLElement>("#element-status")!,
+  onSelectionChange: () => positionControls?.syncSelection(),
 });
-const refreshInspector = () => {
+const currentMetadata = () => {
   const current = browser.current;
-  inspector.setCurrent(current ? {
+  return current ? {
     documentId: current.revision.documentId,
     revisionId: current.revision.revisionId,
     document: current.revision.document,
-  } : null);
+  } : null;
 };
+const refreshInspector = () => inspector.setCurrent(currentMetadata());
 let context: CanvasRenderingContext2D | null = null;
 const render = (document: SceneDocumentV1, images: Parameters<typeof renderEditorFrame>[2], label: string) => {
   if (!context) throw new Error("Canvas2D context is unavailable.");
@@ -39,6 +43,7 @@ const activity: EditorImportActivity = {
     controls.setBusy(true);
     pngControls.setBusy(true);
     rectangleControls.setBusy(true);
+    positionControls?.setBusy(true);
     inspector.setBusy(true);
     return true;
   },
@@ -53,6 +58,9 @@ const activity: EditorImportActivity = {
     pngControls.setReady(ready, browser.current !== null);
     rectangleControls.setBusy(false);
     rectangleControls.setReady(ready, browser.current !== null);
+    positionControls?.setBusy(false);
+    positionControls?.setReady(ready);
+    positionControls?.syncSelection();
   },
 };
 const renderCurrent = () => {
@@ -110,10 +118,28 @@ const rectangleControls = mountEditorRectangleControls({
     return message;
   },
 });
+positionControls = mountEditorPositionControls({
+  form: document.querySelector<HTMLFormElement>("#shape-position")!,
+  position: {
+    x: document.querySelector<HTMLInputElement>("#position-x")!,
+    y: document.querySelector<HTMLInputElement>("#position-y")!,
+  },
+  button: document.querySelector<HTMLButtonElement>("#apply-position")!,
+  status: document.querySelector<HTMLElement>("#position-status")!,
+  activity, getSelection: inspector.getSelection, getCurrent: currentMetadata,
+  setShapePosition: browser.setShapePosition,
+  onPublished: () => {
+    const message = renderCurrent();
+    status.textContent = message;
+    return message;
+  },
+});
+positionControls.syncSelection();
 window.addEventListener("pagehide", () => {
   controls.dispose();
   pngControls.dispose();
   rectangleControls.dispose();
+  positionControls?.dispose();
   inspector.dispose();
   void browser.dispose();
 }, { once: true });
@@ -133,12 +159,16 @@ async function renderStartup() {
     controls.setReady(true);
     pngControls.setReady(true, browser.current !== null);
     rectangleControls.setReady(true, browser.current !== null);
+    positionControls?.setReady(true);
+    positionControls?.syncSelection();
   } catch (error) {
     if (browser.disposed) return;
     const message = error instanceof Error ? error.message : "Unable to restore scene.";
     status.textContent = `Error: ${message}`;
     pngStatus.textContent = `PNG import unavailable. ${message}`;
     document.querySelector<HTMLElement>("#rectangle-status")!.textContent = `Rectangle creation unavailable. ${message}`;
+    positionControls?.setReady(false);
+    document.querySelector<HTMLElement>("#position-status")!.textContent = `Position editing unavailable. ${message}`;
   }
 }
 void renderStartup();

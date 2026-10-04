@@ -381,6 +381,83 @@ it.each([false, true])("real rectangle owns image preparation until disposal set
   for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
 });
 
+it.each([false, true])("real position captures source once and owns all five lanes through disposal (reject=%s)", async (reject) => {
+  const f = await pngFixture(); expect(typeof f.browser.setShapePosition).toBe("function");
+  const input = { documentId: "browser-document", revisionId: "early", elementId: "shape-1", x: -2.5, y: 7.25 };
+  await expect(f.browser.setShapePosition(input)).rejects.toThrow();
+  await f.browser.start(); await expect(f.browser.setShapePosition(input)).rejects.toThrow();
+  await f.browser.importJson(f.json); f.gate.resolve(new Uint8Array([1, 2, 3]).buffer);
+  await f.browser.importPng(f.file, f.rectangle);
+  const source = f.browser.current!; input.revisionId = source.revision.revisionId;
+  const retained = source.images[0]!.handle as { close: ReturnType<typeof vi.fn> };
+  const asset = await f.persistence.readAsset(source.images[0]!.sha256);
+  const gate = deferred<typeof asset>(); f.readAsset.mockClear().mockImplementationOnce(() => gate.promise);
+  const reads: string[] = []; const capturedRequest = { ...input };
+  for (const key of Object.keys(input) as (keyof typeof input)[]) {
+    Object.defineProperty(capturedRequest, key, { get() { reads.push(key); return input[key]; } });
+  }
+  const flight = f.browser.setShapePosition(capturedRequest);
+  input.x = 999; input.y = 999; input.documentId = "foreign";
+  input.revisionId = "late"; input.elementId = source.revision.document.elements.at(-1)!.id;
+  await vi.waitFor(() => expect(f.readAsset).toHaveBeenCalledTimes(1));
+  for (const action of [() => f.browser.setShapePosition(input), () => f.browser.addRectangle(f.rectangle),
+    () => f.browser.importJson(f.json), () => f.browser.importPng(f.file, f.rectangle), () => f.browser.createScene()]) {
+    await expect(action()).rejects.toThrow();
+  }
+  expect(f.browser.current).toBe(source);
+  const disposal = f.browser.dispose(); expect(f.browser.dispose()).toBe(disposal);
+  expect(f.browser.current).toBeNull(); expect(retained.close).not.toHaveBeenCalled();
+  if (reject) gate.reject(new Error("position image fault")); else gate.resolve(asset);
+  if (reject) await expect(flight).rejects.toThrow(); else await expect(flight).resolves.toBeNull();
+  await disposal;
+  const pointers = await f.persistence.readPointers("browser-document");
+  const row = await f.persistence.readRevision("browser-document", pointers.draft!.revisionId);
+  const expected = structuredClone(source.revision.document);
+  if (!reject) Object.assign(expected.elements.find((element) => element.id === "shape-1")!, { x: -2.5, y: 7.25 });
+  expect(row?.document).toEqual(expected); expect(row?.sequence).toBe(reject ? 2 : 3);
+  expect(reads.sort()).toEqual(Object.keys(input).sort());
+  expect(f.writeAsset).toHaveBeenCalledTimes(1); expect(f.writeRevision).toHaveBeenCalledTimes(reject ? 2 : 3);
+  expect(new Set(f.handles).size).toBe(f.handles.length);
+  for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
+  await expect(f.browser.setShapePosition(input)).rejects.toThrow();
+});
+
+it("position metadata gates reject stale sources before UUID/I/O and recover the real shared lane", async () => {
+  const f = await pngFixture(); await f.browser.start(); await f.browser.importJson(f.json);
+  expect(typeof f.browser.setShapePosition).toBe("function");
+  const source = f.browser.current!;
+  const input = { documentId: source.revision.documentId, revisionId: source.revision.revisionId,
+    elementId: "shape-1", x: -2.5, y: 7.25 };
+  const ids = vi.spyOn(crypto, "randomUUID"); ids.mockClear(); f.readPointers.mockClear();
+  for (const invalid of [{ documentId: "foreign" }, { revisionId: "old" }, { elementId: "absent" }, { x: NaN }, { y: Infinity }]) {
+    await expect(f.browser.setShapePosition({ ...input, ...invalid })).rejects.toThrow();
+  }
+  expect(ids).not.toHaveBeenCalled(); expect(f.readPointers).not.toHaveBeenCalled();
+  expect(f.browser.current).toBe(source);
+  const json = f.browser.importJson(f.json);
+  await expect(f.browser.setShapePosition(input)).rejects.toThrow(); await json;
+  await expect(f.browser.setShapePosition(input)).rejects.toThrow();
+  const current = f.browser.current!;
+  const next = await f.browser.setShapePosition({ ...input, revisionId: current.revision.revisionId });
+  expect(next).toBe(f.browser.current); expect(next?.revision.sequence).toBe(3);
+  expect(next?.revision.document.elements.find((element) => element.id === "shape-1")).toMatchObject({ x: -2.5, y: 7.25 });
+  expect(Object.isFrozen(next)).toBe(true); expect(next).not.toHaveProperty("release");
+  await f.browser.dispose();
+});
+
+it("position rejects corrupt startup before caller getters, UUIDs or additional I/O", async () => {
+  const f = await pngFixture(); f.readPointers.mockRejectedValueOnce(new Error("corrupt"));
+  await expect(f.browser.start()).rejects.toThrow("corrupt");
+  const read = vi.fn(() => { throw new Error("caller input read"); });
+  const input = Object.defineProperty({ documentId: "browser-document", revisionId: "source", elementId: "shape-1", x: 1, y: 2 },
+    "x", { get: read });
+  const ids = vi.spyOn(crypto, "randomUUID"); ids.mockClear(); f.readPointers.mockClear();
+  await expect(f.browser.setShapePosition(input)).rejects.toThrow(/EDITOR_SHAPE_POSITION_/);
+  expect(read).not.toHaveBeenCalled(); expect(ids).not.toHaveBeenCalled();
+  for (const spy of [f.readPointers, f.readAsset, f.writeAsset, f.writeRevision]) expect(spy).not.toHaveBeenCalled();
+  expect(f.browser.current).toBeNull(); await f.browser.dispose();
+});
+
 it("rectangle fails closed after corrupt startup before reading geometry", async () => {
   const f = await pngFixture();
   f.readPointers.mockRejectedValueOnce(new Error("corrupt"));

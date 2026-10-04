@@ -56,6 +56,17 @@
       <p id="element-status" role="status" aria-label="Element inspection status" aria-live="polite" aria-atomic="true">Loading local scene…</p>
       <h3 id="element-details-heading">Published element JSON</h3>
       <pre id="element-details" aria-labelledby="element-details-heading"></pre>
+      <form id="shape-position" aria-label="Shape position controls" aria-busy="false" novalidate>
+        <fieldset>
+          <legend>Selected shape position in authored local scene units</legend>
+          <label for="position-x">Position X</label>
+          <input id="position-x" type="number" step="any" disabled />
+          <label for="position-y">Position Y</label>
+          <input id="position-y" type="number" step="any" disabled />
+        </fieldset>
+        <button id="apply-position" type="submit" disabled>Apply position</button>
+      </form>
+      <p id="position-status" role="status" aria-label="Position status" aria-live="polite" aria-atomic="true">Loading local scene…</p>
     </section>
     <p id="status" role="status">Loading local scene…</p>
     <canvas id="scene" width="256" height="160" aria-label="Current scene"></canvas>

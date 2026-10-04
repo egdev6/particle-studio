@@ -1,25 +1,44 @@
 import type { SceneDocumentV1 } from "@particle-studio/scene-document";
 
 /** Borrowed publication metadata only: no image handles or release authority. */
-interface InspectorCurrent {
+export interface InspectorCurrent {
   readonly documentId: string;
   readonly revisionId: string;
   readonly document: SceneDocumentV1;
+}
+export interface InspectorSelection {
+  readonly documentId: string;
+  readonly revisionId: string;
+  readonly elementId: string;
 }
 interface InspectorOptions {
   readonly select: HTMLSelectElement;
   readonly details: HTMLElement;
   readonly status: HTMLElement;
+  readonly onSelectionChange?: () => void;
 }
 
 /** Ephemeral DOM selection; the caller owns publication and resource lifetimes. */
 export function mountEditorElementInspector(options: InspectorOptions) {
-  const { select, details, status } = options;
+  const { select, details, status, onSelectionChange } = options;
   let current: InspectorCurrent | null = null;
   let selectedId = "";
   let ready = false;
   let busy = false;
   let disposed = false;
+  let notifiedSelection: InspectorSelection | null = null;
+  const getSelection = (): InspectorSelection | null => {
+    if (disposed || !ready || !current || !current.documentId || !current.revisionId ||
+      !current.document.elements.some((element) => element.id === selectedId)) return null;
+    return Object.freeze({ documentId: current.documentId, revisionId: current.revisionId, elementId: selectedId });
+  };
+  const notify = () => {
+    const next = getSelection();
+    if (next?.documentId === notifiedSelection?.documentId &&
+      next?.revisionId === notifiedSelection?.revisionId && next?.elementId === notifiedSelection?.elementId) return;
+    notifiedSelection = next;
+    onSelectionChange?.();
+  };
 
   const rebuildOptions = () => {
     const placeholder = select.ownerDocument.createElement("option");
@@ -50,6 +69,7 @@ export function mountEditorElementInspector(options: InspectorOptions) {
     } else {
       status.textContent = `${source} ${element ? `Inspecting ${element.id} (${element.type}).` : "Choose a scene element to inspect."}`;
     }
+    notify();
   };
   const change = () => {
     if (disposed) return;
@@ -66,6 +86,7 @@ export function mountEditorElementInspector(options: InspectorOptions) {
   update();
 
   return Object.freeze({
+    getSelection,
     setCurrent(value: InspectorCurrent | null) {
       if (disposed) return;
       if (current?.documentId !== value?.documentId || current?.revisionId !== value?.revisionId) {
@@ -91,6 +112,7 @@ export function mountEditorElementInspector(options: InspectorOptions) {
       select.removeEventListener("change", change);
       select.disabled = true;
       current = null;
+      notify();
     },
   });
 }
