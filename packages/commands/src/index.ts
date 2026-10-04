@@ -45,6 +45,12 @@ type SetShapePositionPayload = {
   readonly x: number;
   readonly y: number;
 };
+type SetShapeDimensionsPayload = {
+  readonly type: "set-shape-dimensions";
+  readonly elementId: string;
+  readonly width: number;
+  readonly height: number;
+};
 type CreateElementPayload = {
   readonly type: "create-element";
   readonly element: Record<string, unknown>;
@@ -93,6 +99,7 @@ type TimelinePayload = {
 type Payload =
   | SetKeyframeValuePayload
   | SetShapePositionPayload
+  | SetShapeDimensionsPayload
   | TimelinePayload
   | CreateElementPayload
   | RemoveElementPayload
@@ -184,6 +191,23 @@ function parse(command: unknown): Payload | ErrorCode {
       return "MALFORMED_COMMAND";
     }
     return payload as SetShapePositionPayload;
+  }
+  if (command.payload.type === "set-shape-dimensions") {
+    const payload = command.payload;
+    if (
+      command.actorCapability !== "human-ui" ||
+      !hasExactKeys(payload, ["type", "elementId", "width", "height"]) ||
+      !isId(payload.elementId) ||
+      typeof payload.width !== "number" ||
+      !Number.isFinite(payload.width) ||
+      payload.width <= 0 ||
+      typeof payload.height !== "number" ||
+      !Number.isFinite(payload.height) ||
+      payload.height <= 0
+    ) {
+      return "MALFORMED_COMMAND";
+    }
+    return payload as SetShapeDimensionsPayload;
   }
   if (command.payload.type === "set-keyframe-value") {
     if (
@@ -394,6 +418,8 @@ class Session implements CommandSession {
     if (payload.type === "reparent-element") return this.reparent(payload);
     if (payload.type === "set-shape-position")
       return this.setShapePosition(payload);
+    if (payload.type === "set-shape-dimensions")
+      return this.setShapeDimensions(payload);
     if (payload.type !== "set-keyframe-value") return this.timeline(payload);
 
     const track = this.document.tracks.find(
@@ -442,6 +468,33 @@ class Session implements CommandSession {
         if (!shape || shape.type !== "shape") return;
         shape.x = payload.x;
         shape.y = payload.y;
+      },
+    );
+    const validation = validateSceneDocument(candidate);
+    if (!validation.ok) return error("INVALID_CANDIDATE");
+    this.document = validation.value;
+    this.#revision += 1;
+    this.#undo.push({ forward, inverse });
+    this.#redo = [];
+    return this.result();
+  }
+
+  private setShapeDimensions(payload: SetShapeDimensionsPayload): Result {
+    const target = this.document.elements.find(
+      (element) => element.id === payload.elementId,
+    );
+    if (!target) return error("TARGET_NOT_FOUND");
+    if (target.type !== "shape") return error("INVALID_CANDIDATE");
+
+    const [candidate, forward, inverse] = produceWithPatches(
+      this.document,
+      (draft) => {
+        const shape = draft.elements.find(
+          (element) => element.id === payload.elementId,
+        );
+        if (!shape || shape.type !== "shape") return;
+        shape.width = payload.width;
+        shape.height = payload.height;
       },
     );
     const validation = validateSceneDocument(candidate);

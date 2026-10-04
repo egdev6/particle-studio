@@ -29,6 +29,14 @@ An existing root or nested shape keeps its ID while both authored/local axes cha
 
 Equal coordinates are accepted without a no-op error and still append their own undo entry, possibly with empty patches. See the [position tests](tests/command-set-shape-position.test.ts). This primitive is in-memory only: it adds no UI, durable writes or bitmap/cache behavior.
 
+### Shape dimensions
+
+The private supported payload `{ type: "set-shape-dimensions", elementId, width, height }` requires exactly those keys, a nonempty element ID and two finite numbers strictly greater than zero, including positive fractions. This command-only restriction does not narrow SceneDocument's finite-only shape dimension domain. It requires `actorCapability: "human-ui"`; browser-agent and headless-agent requests return `MALFORMED_COMMAND`. This envelope policy is not authentication; other operations retain their existing actor handling.
+
+An existing root or nested shape keeps its ID while both authored/local dimensions change atomically in one validated candidate and one revision/history entry. Every other document field is preserved; no ID allocation, world conversion or reparenting occurs. Missing targets return `TARGET_NOT_FOUND`; nonshape targets return `INVALID_CANDIDATE`.
+
+Equal positive dimensions are accepted and still append their own undo entry, possibly with empty patches. See the [dimensions tests](tests/command-set-shape-dimensions.test.ts). This primitive is in-memory only: it adds no UI, durable writes, bitmap/cache behavior or new agent capability.
+
 ### Revision and history
 
 A successful dispatch validates the candidate document, returns `{ ok: true, revision, document }` with a detached document, and advances the revision by one. `expectedRevision` must equal the current revision; `commandId` is required but is not a deduplication key. Successful undo/redo replay validated patches and also advance the revision; a successful new dispatch clears redo. Even a valid no-op dispatch advances the revision. `fork()` copies the document, revision, and undo/redo history so later edits are independent, but shares the same ID-source callback (its external state is not rewound).
