@@ -166,6 +166,25 @@ then releases publication/cache once; callers must suppress late frame/DOM updat
 The native API fixture proves dimensions independently of a production controller;
 visible dimensions controls and built-entry proof remain later chain units.
 
+## Standalone dimensions controls (issue #116, chain PR3)
+
+`mountEditorDimensionControls` accepts caller-supplied form, width/height inputs,
+button, named **Dimension status**, shared activity, `getSelection`/`getCurrent`,
+`setShapeDimensions` and `onPublished`. It creates no production markup or renderer.
+Only matching published shape metadata enables editing; root/nested values are
+original authored dimensions, including schema-valid zero/negative initial sizes.
+Both new values must be nonempty, finite and positive; fractions and equal pairs
+are valid. Each raw input and the frozen five-scalar intent are captured before
+activity callbacks. Ready/own/shared busy gates honor six-action exclusion.
+New document/revision identity clears selection through the inspector and requires
+explicit reselection; same-source rejection preserves typed values and selection.
+Own success or committed-but-render-failed feedback survives shared settlement;
+external changed-source settlement refreshes guidance from actual current.
+Dispose controls before the inspector: listener removal and late-output suppression
+are idempotent, without cancellation or resource release. The browser remains owner.
+`editor-dimension-controls.test.tsx` supplies standalone DOM contract proof;
+production wiring and built-entry/native UI proof remain PR4, not exposed here.
+
 Run `npm run validator:prepare` before
 `npx vitest run --project core apps/editor/tests/editor-frame.test.ts`.
 Use `npm run build`, `npm run dev`, and `npm run preview` for the JSON editor.
