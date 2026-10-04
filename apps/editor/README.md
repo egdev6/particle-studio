@@ -132,6 +132,24 @@ the existing browser owner waits for work before releasing image resources.
 history/reload, real PNG handle ownership, five-action exclusion, native CAS
 winners and resolving/rejecting pagehide. Startup gates remain in the inspector spec.
 
+## Shape dimensions SDK (issue #116, chain PR1)
+
+`EditorSession.setShapeDimensions({documentId, revisionId, elementId, width, height})`
+is a source-bound durable SDK action only: no browser facade method or visible UI
+is introduced in PR1. It captures all five scalars once before callbacks/awaits;
+a genuine live matching publication, root/nested shape and sequence room are required.
+Both new dimensions must be finite positive numbers (fractions are valid), checked
+before IDs/time or asset/persistence I/O. Existing schema-valid zero/negative source
+sizes remain importable. A fresh human-UI bridge dispatches `set-shape-dimensions`
+at command revision 0 without element-ID allocation, preserving stable ID and every
+field except width/height. Selected expectedSource and existing CAS prevent rebasing;
+equal pairs still publish a new durable revision, sequence and pointer. Bounded
+`EDITOR_SHAPE_DIMENSIONS_*` failures preserve current/history and any durable winner.
+PNG prehydration retains useful handles and closes duplicates once; the existing
+owner awaits settlement before cleanup. Core session tests use the real workspace
+and IndexedDB adapter with fake-indexeddb, not native Chromium dimension proof.
+Browser-facade, DOM and production UI/native proofs belong to later chain units.
+
 Run `npm run validator:prepare` before
 `npx vitest run --project core apps/editor/tests/editor-frame.test.ts`.
 Use `npm run build`, `npm run dev`, and `npm run preview` for the JSON editor.
