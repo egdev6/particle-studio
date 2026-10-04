@@ -83,6 +83,25 @@ Named **Position status** reports committed-but-render-failed warnings truthfull
 while inspection refreshes from actual current. All five actions share the lane.
 Position disposal precedes inspector disposal; existing owners await settlement.
 
+## Browser dimensions API proof (no production dimensions UI yet)
+
+`set-shape-dimensions-api.spec.ts` runs in the `chromium` fixture project at
+`http://127.0.0.1:4175/apps/editor/tests/browser/fixtures/browser-dimensions-api.fixture.html`.
+Run `npx playwright test --project chromium set-shape-dimensions-api.spec.ts` for
+focused proof, or `npm run test:browser` for both projects; Playwright still starts
+both configured servers. Core facade tests use the existing core command below.
+The test-only harness uses the real facade, native IndexedDB, browser SHA/PNG and
+canvas. Recursive key-sorted JSON preserves array order as an independent oracle.
+Root/nested and equal publications check complete rows/history/pointers/assets/IDs;
+source/pair/sequence guards, reused IDs, six-action holds and actual competing-tab
+winners preserve authoritative CAS. Holds delay genuine readonly pointer results,
+never conditional readwrite requests. Saved-pointer mutations require public reload.
+Per-handle drawable usefulness and close counts cover resolving/rejecting disposal;
+fixture rendering suppresses late DOM/frame/notifications and distinguishes committed
+publication from rendering failure. No production renderer hook or dimensions UI is added.
+Local browser selection includes this spec; CI's develop/main branch filters remain
+unchanged and do not authorize child-branch routing changes.
+
 ## Verify browser behavior
 
 ```sh
