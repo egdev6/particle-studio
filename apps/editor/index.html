@@ -67,6 +67,17 @@
         <button id="apply-position" type="submit" disabled>Apply position</button>
       </form>
       <p id="position-status" role="status" aria-label="Position status" aria-live="polite" aria-atomic="true">Loading local scene…</p>
+      <form id="shape-dimensions" aria-label="Shape dimension controls" aria-busy="false" novalidate>
+        <fieldset>
+          <legend>Selected shape dimensions in authored local scene units</legend>
+          <label for="dimension-width">Dimension width</label>
+          <input id="dimension-width" type="number" step="any" disabled />
+          <label for="dimension-height">Dimension height</label>
+          <input id="dimension-height" type="number" step="any" disabled />
+        </fieldset>
+        <button id="apply-dimensions" type="submit" disabled>Apply dimensions</button>
+      </form>
+      <p id="dimension-status" role="status" aria-label="Dimension status" aria-live="polite" aria-atomic="true">Loading local scene…</p>
     </section>
     <p id="status" role="status">Loading local scene…</p>
     <canvas id="scene" width="256" height="160" aria-label="Current scene"></canvas>
