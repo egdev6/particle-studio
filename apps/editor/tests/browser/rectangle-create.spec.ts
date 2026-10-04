@@ -152,6 +152,7 @@ for (const image of [false, true]) {
     for (const name of ["Add rectangle", "Import PNG", "Import editable JSON", "Create blank scene"]) {
       await expect(page.getByRole("button", { name, exact: true })).toBeDisabled();
     }
+    await expect(page.getByRole("combobox", { name: "Scene element", exact: true })).toBeDisabled();
     await add(page).dispatchEvent("click");
     await page.locator("#rectangle-create").dispatchEvent("submit");
     await page.locator("#json-import").dispatchEvent("submit");

@@ -8,6 +8,9 @@ test("built preview renders the first-slice scene at playback start", async ({ p
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "JSON scene editor" })).toBeVisible();
   await expect(page.getByRole("status", { name: "", exact: true })).toHaveText("Rendered unpersisted sample at 0 µs.");
+  await expect(page.getByRole("combobox", { name: "Scene element", exact: true })).toBeDisabled();
+  await expect(page.getByLabel("Published element JSON", { exact: true })).toHaveText("");
+  await expect(page.getByRole("status", { name: "", exact: true })).toHaveCount(1);
   const before = await nativeRows(page);
   expect(Object.values(before).every((rows) => Array.isArray(rows) && rows.length === 0)).toBe(true);
   await page.reload();
@@ -41,6 +44,8 @@ test("unavailable Canvas2D context reports an error, not a rendered scene", asyn
   await expect(page.getByRole("button", { name: "Import PNG", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Create blank scene", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Add rectangle", exact: true })).toBeDisabled();
+  await expect(page.getByRole("combobox", { name: "Scene element", exact: true })).toBeDisabled();
+  await expect(page.getByRole("status", { name: "", exact: true })).toHaveCount(1);
   expect(pageErrors).toEqual([]);
 });
 
@@ -126,6 +131,8 @@ for (const scenario of cases) {
         Array.from(canvas.getContext("2d")!.getImageData(0, 0, 256, 160).data).filter((_value, index) => index % 4 === 3));
       expect(alpha.every((value) => value === 0)).toBe(true);
     }
+    if (scenario !== "draft-image") await expect(page.getByRole("combobox", { name: "Scene element", exact: true })).toBeDisabled();
+    await expect(page.getByRole("status", { name: "", exact: true })).toHaveCount(1);
     expect(await nativeRows(page)).toEqual(before);
     expect(pageErrors).toEqual([]);
     if (scenario === "draft-image") {
@@ -148,6 +155,7 @@ for (const scenario of cases) {
       await expect(page.locator("html")).toHaveAttribute("data-decode", "pending");
       await expect(page.getByRole("button", { name: "Import editable JSON" })).toBeDisabled();
       await expect(page.getByRole("button", { name: "Add rectangle", exact: true })).toBeDisabled();
+      await expect(page.getByRole("combobox", { name: "Scene element", exact: true })).toBeDisabled();
       await page.evaluate(() => {
         window.dispatchEvent(new Event("pagehide"));
         window.dispatchEvent(new Event("pagehide"));

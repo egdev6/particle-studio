@@ -46,6 +46,17 @@
       <button id="add-rectangle" type="submit" disabled>Add rectangle</button>
     </form>
     <p id="rectangle-status" role="status" aria-label="Rectangle creation status" aria-live="polite" aria-atomic="true">Loading local scene…</p>
+    <section aria-labelledby="element-inspector-heading">
+      <h2 id="element-inspector-heading">Published element inspector</h2>
+      <p>Choose an element from the published scene. This read-only view does not use the editable JSON input.</p>
+      <label for="scene-element">Scene element</label>
+      <select id="scene-element" disabled>
+        <option value="">Choose a scene element</option>
+      </select>
+      <p id="element-status" role="status" aria-label="Element inspection status" aria-live="polite" aria-atomic="true">Loading local scene…</p>
+      <h3 id="element-details-heading">Published element JSON</h3>
+      <pre id="element-details" aria-labelledby="element-details-heading"></pre>
+    </section>
     <p id="status" role="status">Loading local scene…</p>
     <canvas id="scene" width="256" height="160" aria-label="Current scene"></canvas>
     <script type="module" src="/src/editor-canvas-entry.ts"></script>

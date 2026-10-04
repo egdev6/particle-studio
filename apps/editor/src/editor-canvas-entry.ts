@@ -3,12 +3,26 @@ import { createBrowserEditorSession } from "./browser-editor-session.js";
 import { mountEditorJsonImportControls, type EditorImportActivity } from "./editor-json-import-controls.js";
 import { mountEditorPngImportControls } from "./editor-png-import-controls.js";
 import { mountEditorRectangleControls } from "./editor-rectangle-controls.js";
+import { mountEditorElementInspector } from "./editor-element-inspector.js";
 import { renderEditorFrame } from "./editor-frame.js";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#scene")!;
 const status = document.querySelector<HTMLElement>("#status")!;
 const pngStatus = document.querySelector<HTMLElement>("#png-status")!;
 const browser = createBrowserEditorSession();
+const inspector = mountEditorElementInspector({
+  select: document.querySelector<HTMLSelectElement>("#scene-element")!,
+  details: document.querySelector<HTMLElement>("#element-details")!,
+  status: document.querySelector<HTMLElement>("#element-status")!,
+});
+const refreshInspector = () => {
+  const current = browser.current;
+  inspector.setCurrent(current ? {
+    documentId: current.revision.documentId,
+    revisionId: current.revision.revisionId,
+    document: current.revision.document,
+  } : null);
+};
 let context: CanvasRenderingContext2D | null = null;
 const render = (document: SceneDocumentV1, images: Parameters<typeof renderEditorFrame>[2], label: string) => {
   if (!context) throw new Error("Canvas2D context is unavailable.");
@@ -25,10 +39,14 @@ const activity: EditorImportActivity = {
     controls.setBusy(true);
     pngControls.setBusy(true);
     rectangleControls.setBusy(true);
+    inspector.setBusy(true);
     return true;
   },
   end() {
     if (browser.disposed) return;
+    // Publication may have committed even when rendering the new frame threw.
+    refreshInspector();
+    inspector.setBusy(false);
     busy = false;
     controls.setBusy(false);
     pngControls.setBusy(false);
@@ -96,6 +114,7 @@ window.addEventListener("pagehide", () => {
   controls.dispose();
   pngControls.dispose();
   rectangleControls.dispose();
+  inspector.dispose();
   void browser.dispose();
 }, { once: true });
 
@@ -109,6 +128,8 @@ async function renderStartup() {
     const images = startup.kind === "restored" ? startup.current.images : [];
     status.textContent = render(document, images, startup.kind === "restored" ? "restored draft" : "unpersisted sample");
     ready = true;
+    refreshInspector();
+    inspector.setReady(true);
     controls.setReady(true);
     pngControls.setReady(true, browser.current !== null);
     rectangleControls.setReady(true, browser.current !== null);

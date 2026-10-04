@@ -73,6 +73,34 @@ On `pagehide`, a disposed flag suppresses late frames/status/publication use.
 Cleanup awaits owned work, releases current and clears cache once. It does not
 cancel the workspace queue or close/delete the adapter's database.
 
+## Inspect published elements
+
+After creating, importing or restoring a genuine draft, choose **Scene element**.
+The dropdown lists every actual element in document order, including root/nested
+groups and shape, line, text, particle and image variants. It starts with a
+placeholder; creating an object never automatically selects it.
+**Published element JSON** is a read-only view of that authored element, not the
+Editable JSON textarea, animated track values or evaluated geometry. Groups retain
+actual childrenIds/optional transform/visible; images expose declared asset metadata,
+not bitmap handles or byte buffers. Safe DOM text preserves literal text content.
+
+Selection is ephemeral: a new documentId/revisionId clears it even if an ID is
+reused; same-source refresh or rejected work retains a still-valid selection.
+Reload restores the durable scene/pixels but clears selection. Healthy ready startup
+and a genuine current are required; empty/saved-only users must Create blank scene
+or import JSON. Pending, failed startup, unavailable context and disposal disable it.
+All four existing actions disable selection in their shared lane; named inspector
+feedback identifies retained detail's previous publication while pending. Settlement
+refreshes actual current even after publication succeeded but rendering failed.
+The inspector borrows metadata only: no new command/session API, persistence,
+asset I/O, runtime evaluation, painting, bitmap lookup/decode/close or resource
+ownership. Pagehide removes its sole change listener once and freezes late updates.
+No canvas picking/highlights, editing, undo or timeline controls are added.
+
+`editor-element-inspector.test.tsx` covers the DOM/identity/lifetime contract;
+`browser/element-inspector.spec.ts` exercises real production publications and
+inspection-only native-row, pixel and per-bitmap zero-effect comparisons.
+
 Run `npm run validator:prepare` before
 `npx vitest run --project core apps/editor/tests/editor-frame.test.ts`.
 Use `npm run build`, `npm run dev`, and `npm run preview` for the JSON editor.
