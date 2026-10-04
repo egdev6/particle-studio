@@ -40,6 +40,7 @@ test("unavailable Canvas2D context reports an error, not a rendered scene", asyn
   await expect(page.getByRole("button", { name: "Import editable JSON" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Import PNG", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Create blank scene", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Add rectangle", exact: true })).toBeDisabled();
   expect(pageErrors).toEqual([]);
 });
 
@@ -119,6 +120,8 @@ for (const scenario of cases) {
       await expect(page.getByRole("button", { name: "Import PNG", exact: true })).toBeDisabled();
       const create = page.getByRole("button", { name: "Create blank scene", exact: true });
       await expect(create).toBeDisabled(); await create.dispatchEvent("click");
+      const rectangle = page.getByRole("button", { name: "Add rectangle", exact: true });
+      await expect(rectangle).toBeDisabled(); await rectangle.dispatchEvent("click");
       const alpha = await page.locator("#scene").evaluate((canvas: HTMLCanvasElement) =>
         Array.from(canvas.getContext("2d")!.getImageData(0, 0, 256, 160).data).filter((_value, index) => index % 4 === 3));
       expect(alpha.every((value) => value === 0)).toBe(true);
@@ -144,6 +147,7 @@ for (const scenario of cases) {
       await page.reload();
       await expect(page.locator("html")).toHaveAttribute("data-decode", "pending");
       await expect(page.getByRole("button", { name: "Import editable JSON" })).toBeDisabled();
+      await expect(page.getByRole("button", { name: "Add rectangle", exact: true })).toBeDisabled();
       await page.evaluate(() => {
         window.dispatchEvent(new Event("pagehide"));
         window.dispatchEvent(new Event("pagehide"));

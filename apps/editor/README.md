@@ -19,11 +19,11 @@ The production entry is a vanilla durable JSON editor with PNG insertion. `brows
 composes the actual IndexedDB adapter, browser SHA-256/PNG primitives and editor
 session for the fixed local database `particle-studio-browser-viewer` and document
 `browser-document`. Dependencies are captured at construction without I/O;
-startup owns a bounded flight; JSON and PNG imports share one owned flight. Empty and valid saved-only slots show an
+startup owns a bounded flight; JSON, creation, PNG and rectangle actions share one owned flight. Empty and valid saved-only slots show an
 explicitly **unpersisted sample**, without creating a draft. Existing drafts reload
 verified canonical content and PNGs, then render at their own playback start.
 Startup failures block import: no reset, deletion, seed or fallback success.
-Accessible independent JSON/PNG controls capture input once; both disable during shared work.
+Accessible independent JSON/PNG/rectangle controls capture input once; all disable during shared work.
 User imports publish through the existing workflow, hydrate locally stored PNG
 references and render the current publication at its playback start. A startup-known
 sequence floor permits saved-only imports while retaining saved rows; only JSON
@@ -50,6 +50,24 @@ Dedicated PNG status reports errors without replacing the canvas/JSON status.
 PNG failures preserve document/pointer/current/frame, **not necessarily assets**:
 immutable bytes may already be written before verification, decode or stale-source
 rejection. No rollback, garbage collection or asset cleanup is added.
+**Add rectangle** requires a genuine current in the configured document, never the
+sample. Editable x/y/width/height default to 16/24/120/80, with fixed opacity 1;
+empty/nonfinite positions or nonpositive/nonfinite sizes fail visibly. Coordinates
+are root scene units, not a group's local coordinates. No JSON text or File is needed.
+The narrow `EditorSession.addRectangle(geometry): Promise<void>` constructs a fresh
+`createEditorDurableEditing` bridge per activation and dispatches one human-UI
+`create-element` shape at command revision 0, independently of the durable sequence.
+It captures geometry, source, IDs and timestamp before awaiting; rejected dispatch
+fails the action. Publication binds `expectedSource` and advances source.sequence+1,
+rejecting overflow. It appends without rebuilding existing fields, groups, tracks,
+playback, seed or image references. Subsequent imports use the live sequence;
+JSON retains its startup floor. Rectangle creation writes no asset bytes, but
+canonical prehydration still rereads/redecodes referenced PNGs: duplicate handles
+close once while retained handles stay renderable through publication replacement.
+Named rectangle status preserves the unique unnamed primary canvas status.
+All four actions share the facade's authoritative lane and UI activity. Preparation,
+image hydration and stale-source failures preserve the prior publication/frame and
+appropriate durable rows; there is no automatic retry/rebase or native-draw rollback.
 Schema initialization is allowed; startup never writes durable content records.
 On `pagehide`, a disposed flag suppresses late frames/status/publication use.
 Cleanup awaits owned work, releases current and clears cache once. It does not
@@ -67,3 +85,6 @@ readiness, captured input, single flight, actionable errors and listener cleanup
 `editor-png-import-controls.test.tsx` tests shared cross-action activity and captured
 File/geometry; `browser/png-import.spec.ts` proves built-entry pixels, durable
 identity/refresh, exact permitted failed asset writes and settlement-aware disposal.
+`editor-rectangle-controls.test.tsx` covers capture/shared activity/disposal;
+`browser/rectangle-create.spec.ts` uses the built entry, native IDB, real PNGs and
+per-bitmap lifetimes to cover pixels/refresh, winners and both pagehide outcomes.

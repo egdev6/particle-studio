@@ -2,6 +2,7 @@ import { FIRST_SLICE_DOCUMENT, type SceneDocumentV1 } from "@particle-studio/sce
 import { createBrowserEditorSession } from "./browser-editor-session.js";
 import { mountEditorJsonImportControls, type EditorImportActivity } from "./editor-json-import-controls.js";
 import { mountEditorPngImportControls } from "./editor-png-import-controls.js";
+import { mountEditorRectangleControls } from "./editor-rectangle-controls.js";
 import { renderEditorFrame } from "./editor-frame.js";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#scene")!;
@@ -23,14 +24,17 @@ const activity: EditorImportActivity = {
     busy = true;
     controls.setBusy(true);
     pngControls.setBusy(true);
+    rectangleControls.setBusy(true);
     return true;
   },
   end() {
-    busy = false;
     if (browser.disposed) return;
+    busy = false;
     controls.setBusy(false);
     pngControls.setBusy(false);
     pngControls.setReady(ready, browser.current !== null);
+    rectangleControls.setBusy(false);
+    rectangleControls.setReady(ready, browser.current !== null);
   },
 };
 const renderCurrent = () => {
@@ -71,9 +75,27 @@ const pngControls = mountEditorPngImportControls({
     return message;
   },
 });
+const rectangleControls = mountEditorRectangleControls({
+  form: document.querySelector<HTMLFormElement>("#rectangle-create")!,
+  button: document.querySelector<HTMLButtonElement>("#add-rectangle")!,
+  status: document.querySelector<HTMLElement>("#rectangle-status")!,
+  rectangle: {
+    x: document.querySelector<HTMLInputElement>("#rectangle-x")!,
+    y: document.querySelector<HTMLInputElement>("#rectangle-y")!,
+    width: document.querySelector<HTMLInputElement>("#rectangle-width")!,
+    height: document.querySelector<HTMLInputElement>("#rectangle-height")!,
+  },
+  activity, addRectangle: browser.addRectangle,
+  onCreated: () => {
+    const message = renderCurrent();
+    status.textContent = message;
+    return message;
+  },
+});
 window.addEventListener("pagehide", () => {
   controls.dispose();
   pngControls.dispose();
+  rectangleControls.dispose();
   void browser.dispose();
 }, { once: true });
 
@@ -89,11 +111,13 @@ async function renderStartup() {
     ready = true;
     controls.setReady(true);
     pngControls.setReady(true, browser.current !== null);
+    rectangleControls.setReady(true, browser.current !== null);
   } catch (error) {
     if (browser.disposed) return;
     const message = error instanceof Error ? error.message : "Unable to restore scene.";
     status.textContent = `Error: ${message}`;
     pngStatus.textContent = `PNG import unavailable. ${message}`;
+    document.querySelector<HTMLElement>("#rectangle-status")!.textContent = `Rectangle creation unavailable. ${message}`;
   }
 }
 void renderStartup();

@@ -122,6 +122,7 @@ async function pngFixture() {
   const persistence = adapter.createIndexedDbPersistenceAdapter({ databaseName: `browser-png-${crypto.randomUUID()}` });
   const readPointers = vi.spyOn(persistence, "readPointers");
   const writeAsset = vi.spyOn(persistence, "writeAsset");
+  const readAsset = vi.spyOn(persistence, "readAsset");
   const writeRevision = vi.spyOn(persistence, "writeCompleteRevisionIfPointersMatch");
   const handles: { width: number; height: number; close: ReturnType<typeof vi.fn> }[] = [];
   vi.stubGlobal("createImageBitmap", vi.fn(async () => {
@@ -137,7 +138,7 @@ async function pngFixture() {
   const read = vi.spyOn(file, "arrayBuffer").mockReturnValue(gate.promise);
   const rectangle = { x: 12, y: 18, width: 64, height: 32 };
   const json = JSON.stringify(FIRST_SLICE_DOCUMENT);
-  return { browser, persistence, readPointers, writeAsset, writeRevision, handles, gate, file, read, rectangle, json };
+  return { browser, persistence, readPointers, readAsset, writeAsset, writeRevision, handles, gate, file, read, rectangle, json };
 }
 
 it("guards PNG before file/asset work and captures geometry in the real shared workflow", async () => {
@@ -304,4 +305,90 @@ it("does not start a reload after disposal during the initial pointer read", asy
   await disposal;
   expect(reload).not.toHaveBeenCalled();
   expect(clear).toHaveBeenCalledTimes(1);
+});
+
+it("real rectangle facade guards all four lanes and captures placement before native preparation", async () => {
+  const f = await pngFixture();
+  const ids = vi.spyOn(crypto, "randomUUID"); ids.mockClear();
+  await expect(f.browser.addRectangle(f.rectangle)).rejects.toThrow();
+  expect(ids).not.toHaveBeenCalled();
+  await f.browser.start();
+  await expect(f.browser.addRectangle(f.rectangle)).rejects.toThrow();
+  expect(f.writeRevision).not.toHaveBeenCalled();
+  const creation = f.browser.createScene();
+  await expect(f.browser.addRectangle(f.rectangle)).rejects.toThrow();
+  await creation;
+  const previous = f.browser.current;
+  for (const invalid of [{ x: NaN }, { y: Infinity }, { width: 0 }, { height: -1 }]) {
+    ids.mockClear();
+    await expect(f.browser.addRectangle({ ...f.rectangle, ...invalid })).rejects.toThrow();
+    expect(ids).not.toHaveBeenCalled();
+  }
+  const realRead = f.persistence.readPointers.bind(f.persistence);
+  const gate = deferred<Awaited<ReturnType<typeof realRead>>>();
+  f.readPointers.mockImplementationOnce(() => gate.promise);
+  const captured = { ...f.rectangle };
+  const flight = f.browser.addRectangle(f.rectangle);
+  f.rectangle.x = 200; f.rectangle.width = 1;
+  await expect(f.browser.addRectangle(f.rectangle)).rejects.toThrow();
+  await expect(f.browser.importJson(f.json)).rejects.toThrow();
+  await expect(f.browser.importPng(f.file, f.rectangle)).rejects.toThrow();
+  await expect(f.browser.createScene()).rejects.toThrow();
+  expect(f.browser.current).toBe(previous);
+  gate.resolve(await realRead("browser-document"));
+  const current = await flight;
+  expect(current).toBe(f.browser.current);
+  expect(current?.revision.sequence).toBe(2);
+  const id = current!.revision.document.elements.at(-1)!.id;
+  expect(current?.revision.document).toEqual({ ...blankDocument,
+    rootIds: ["root", id], elements: [...blankDocument.elements, { id, type: "shape", ...captured, opacity: 1 }] });
+  expect(f.writeRevision).toHaveBeenCalledTimes(2);
+  expect(f.writeAsset).not.toHaveBeenCalled(); expect(f.read).not.toHaveBeenCalled();
+  const json = f.browser.importJson(f.json);
+  await expect(f.browser.addRectangle(captured)).rejects.toThrow(); await json;
+  const png = f.browser.importPng(f.file, captured);
+  await expect(f.browser.addRectangle(captured)).rejects.toThrow();
+  f.gate.resolve(new Uint8Array([1, 2, 3]).buffer); await png;
+  expect(f.browser.current?.revision.sequence).toBe(4);
+  await f.browser.dispose();
+  ids.mockClear(); await expect(f.browser.addRectangle(captured)).rejects.toThrow();
+  expect(ids).not.toHaveBeenCalled();
+  for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
+});
+
+it.each([false, true])("real rectangle owns image preparation until disposal settles (reject=%s)", async (reject) => {
+  const f = await pngFixture(); await f.browser.start(); await f.browser.importJson(f.json);
+  f.gate.resolve(new Uint8Array([1, 2, 3]).buffer);
+  await f.browser.importPng(f.file, f.rectangle);
+  const image = f.browser.current!.images[0]!;
+  const retained = image.handle as { close: ReturnType<typeof vi.fn> };
+  const asset = await f.persistence.readAsset(image.sha256);
+  const gate = deferred<typeof asset>();
+  const read = f.readAsset.mockClear().mockImplementationOnce(() => gate.promise);
+  const flight = f.browser.addRectangle(f.rectangle);
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+  const disposal = f.browser.dispose();
+  expect(f.browser.dispose()).toBe(disposal);
+  expect(f.browser.current).toBeNull(); expect(retained.close).not.toHaveBeenCalled();
+  if (reject) gate.reject(new Error("image preparation failed"));
+  else gate.resolve(asset);
+  if (reject) await expect(flight).rejects.toThrow();
+  else await expect(flight).resolves.toBeNull();
+  await disposal;
+  expect(f.browser.current).toBeNull();
+  expect(f.writeRevision).toHaveBeenCalledTimes(reject ? 2 : 3);
+  expect(f.writeAsset).toHaveBeenCalledTimes(1);
+  for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
+});
+
+it("rectangle fails closed after corrupt startup before reading geometry", async () => {
+  const f = await pngFixture();
+  f.readPointers.mockRejectedValueOnce(new Error("corrupt"));
+  await expect(f.browser.start()).rejects.toThrow("corrupt");
+  const readGeometry = vi.fn(() => { throw new Error("read geometry"); });
+  const geometry = Object.defineProperty({}, "x", { get: readGeometry });
+  await expect(f.browser.addRectangle(geometry as typeof f.rectangle)).rejects.toThrow();
+  expect(readGeometry).not.toHaveBeenCalled();
+  expect(f.writeRevision).not.toHaveBeenCalled(); expect(f.writeAsset).not.toHaveBeenCalled();
+  await f.browser.dispose();
 });
