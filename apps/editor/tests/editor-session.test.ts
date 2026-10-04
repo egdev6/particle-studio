@@ -336,6 +336,196 @@ it("composes JSON, editing, PNG, stale rejection, explicit new agents and warm r
   for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
 });
 
+type PositionRequest = { documentId: string; revisionId: string; elementId: string; x: number; y: number };
+function selectedPosition(f: ReturnType<typeof fixture>, x = -2.5, y = 7.25): PositionRequest {
+  const source = f.session.workspace.current!.revision;
+  return { documentId: source.documentId, revisionId: source.revisionId, elementId: "shape-1", x, y };
+}
+function clearPositionEffects(f: ReturnType<typeof fixture>) {
+  for (const spy of [f.readPointers, f.readRevision, f.writeRevision, f.readAsset, f.writeAsset,
+    f.deps.sha256, f.decodePng, f.deps.commandId, f.deps.elementIdSource, f.deps.revisionId,
+    f.deps.createdAt]) spy.mockClear();
+}
+function expectNoPositionEffects(f: ReturnType<typeof fixture>) {
+  for (const spy of [f.readPointers, f.readRevision, f.writeRevision, f.readAsset, f.writeAsset,
+    f.deps.sha256, f.decodePng, f.deps.commandId, f.deps.elementIdSource, f.deps.revisionId,
+    f.deps.createdAt]) expect(spy).not.toHaveBeenCalled();
+}
+
+it.each(["root", "nested", "equal"])("position publishes exact %s content using a fresh human bridge", async (kind) => {
+  const f = fixture(); const document = documentAt(0.4);
+  document.seed = 99; document.loop = false; document.playbackRange.startUs = 500_000;
+  Object.assign(document.elements[0]!, { width: 31, height: 47, opacity: 0.6,
+    transform: [1, 0.5, 0, 2, 10, -20], visible: false });
+  if (kind === "nested") {
+    document.rootIds = ["group"];
+    document.elements.push({ id: "group", type: "group", childrenIds: ["shape-1"], transform: [1, 0, 0, 1, 30, 40] });
+  }
+  await f.importJson(document); const source = f.session.workspace.current!;
+  expect(typeof f.session.setShapePosition).toBe("function");
+  const shape = document.elements[0]!; if (shape.type !== "shape") throw new Error("fixture shape required");
+  const input = selectedPosition(f, kind === "equal" ? shape.x : -2.5, kind === "equal" ? shape.y : 7.25);
+  const reads: string[] = [];
+  const request = { ...input };
+  for (const key of Object.keys(input) as (keyof PositionRequest)[]) {
+    Object.defineProperty(request, key, { get() { reads.push(key); return input[key]; } });
+  }
+  const real = durableEditing.createEditorDurableEditing;
+  const dispatch = vi.fn(); const publish = vi.fn();
+  const bridge = vi.spyOn(durableEditing, "createEditorDurableEditing").mockImplementation((options) => {
+    const result = real({ ...options, workspace: { get current() { return options.workspace.current; },
+      publish: (request) => { publish(request); return options.workspace.publish(request); },
+      reload: options.workspace.reload.bind(options.workspace) } });
+    if (!result.ok) return result;
+    return { ok: true, editing: { snapshot: result.editing.snapshot.bind(result.editing),
+      undo: result.editing.undo.bind(result.editing), redo: result.editing.redo.bind(result.editing),
+      dispatch: (command) => { dispatch(command); return result.editing.dispatch(command); } } };
+  });
+  clearPositionEffects(f); const flight = f.session.setShapePosition(request);
+  expect(reads.sort()).toEqual(Object.keys(input).sort());
+  input.x = 999; input.y = 999; input.documentId = "foreign";
+  input.elementId = "group"; input.revisionId = "retargeted";
+  await flight;
+  const x = kind === "equal" ? shape.x : -2.5; const y = kind === "equal" ? shape.y : 7.25;
+  const expected = structuredClone(document); Object.assign(expected.elements[0]!, { x, y });
+  expect(dispatch).toHaveBeenCalledExactlyOnceWith({ commandSchemaVersion: 1, commandId: "image-command",
+    documentId: "document-1", expectedRevision: 0, actorCapability: "human-ui",
+    payload: { type: "set-shape-position", elementId: "shape-1", x, y } });
+  expect(publish.mock.calls[0]![0]).toMatchObject({ sequence: 2,
+    expectedSource: { documentId: "document-1", revisionId: source.revision.revisionId } });
+  await expectDurable(f, "revision-2", 2, expected);
+  expect(reads.sort()).toEqual(Object.keys(input).sort());
+  expect(await f.persistence.readRevision("document-1", "revision-1")).toEqual(source.revision);
+  expect(f.deps.elementIdSource).not.toHaveBeenCalled(); expect(f.deps.commandId).toHaveBeenCalledTimes(1);
+  expect(f.deps.revisionId).toHaveBeenCalledTimes(1); expect(f.deps.createdAt).toHaveBeenCalledTimes(1);
+  await f.session.setShapePosition(selectedPosition(f, x, y));
+  expect(bridge).toHaveBeenCalledTimes(2); expect(dispatch.mock.calls[1]![0]).toMatchObject({ expectedRevision: 0 });
+  await expectDurable(f, "revision-3", 3, expected);
+});
+
+it.each([
+  ["missing document", { documentId: "" }], ["foreign document", { documentId: "foreign" }],
+  ["missing revision", { revisionId: "" }], ["stale revision", { revisionId: "old" }],
+  ["nonstring document", { documentId: 3 }], ["nonstring revision", { revisionId: null }],
+  ["missing target", { elementId: "" }], ["unknown target", { elementId: "unknown" }],
+  ["nonstring target", { elementId: 3 }], ["group target", { elementId: "group" }],
+  ["NaN X", { x: NaN }], ["infinite Y", { y: Infinity }], ["negative infinite X", { x: -Infinity }],
+  ["string X", { x: "4" }], ["null Y", { y: null }],
+] as const)("position rejects %s before IDs, time, assets or persistence", async (_name, invalid) => {
+  const f = fixture(); const document = documentAt(0.4);
+  document.elements.push({ id: "group", type: "group", childrenIds: [] }); document.rootIds.push("group");
+  await f.importJson(document); const current = f.session.workspace.current;
+  const pointers = await f.persistence.readPointers("document-1"); clearPositionEffects(f);
+  expect(typeof f.session.setShapePosition).toBe("function");
+  await expect(f.session.setShapePosition({ ...selectedPosition(f), ...invalid } as PositionRequest)).rejects.toThrow();
+  expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+  expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+});
+
+it.each([null, undefined, {}])("position rejects malformed requests with bounded errors and no effects (%j)", async (input) => {
+  const f = fixture(); await f.importJson(); const current = f.session.workspace.current;
+  clearPositionEffects(f);
+  await expect(f.session.setShapePosition(input as PositionRequest)).rejects.toThrow(/EDITOR_SHAPE_POSITION_/);
+  expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+});
+
+it.each(["missing", "foreign", "overflow", "released"])("position rejects %s live current without effects", async (kind) => {
+  const f = fixture();
+  if (kind !== "missing") await f.session.workspace.publish({ documentId: kind === "foreign" ? "foreign" : "document-1",
+    editableJson: JSON.stringify(documentAt(0.4)), revisionId: () => "source",
+    sequence: kind === "overflow" ? Number.MAX_SAFE_INTEGER : 1, createdAt: () => 1234 });
+  if (kind === "released") f.session.workspace.current!.release();
+  const current = f.session.workspace.current; clearPositionEffects(f);
+  expect(typeof f.session.setShapePosition).toBe("function");
+  await expect(f.session.setShapePosition({ documentId: "document-1", revisionId: "source", elementId: "shape-1", x: 1, y: 2 })).rejects.toThrow();
+  expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+});
+
+it.each(["line", "text", "particle", "image"] as const)("position rejects a genuine %s target without effects", async (type) => {
+  const f = fixture(); await f.importJson();
+  if (type === "image") await f.session.importWorkflow({ kind: "image-import", file: new File([bytes], "image.png", { type: "image/png" }) });
+  else {
+    const document = documentAt(0.4);
+    const element = type === "line" ? { id: "nonshape", type, x1: 0, y1: 0, x2: 1, y2: 1, opacity: 1 }
+      : type === "text" ? { id: "nonshape", type, x: 0, y: 0, text: "authored", fontSize: 12, opacity: 1 }
+      : { id: "nonshape", type, count: 1, x: 0, y: 0, velocityX: 1, velocityY: 1, spread: 1, size: 1, opacity: 1, lifetimeSteps: 1 };
+    document.elements.push(element); document.rootIds.push("nonshape"); await f.importJson(document);
+  }
+  const current = f.session.workspace.current; const pointers = await f.persistence.readPointers("document-1");
+  clearPositionEffects(f); expect(typeof f.session.setShapePosition).toBe("function");
+  await expect(f.session.setShapePosition({ ...selectedPosition(f), elementId: type === "image" ? "image-1" : "nonshape" })).rejects.toThrow();
+  expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+  expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+});
+
+it("position refuses a reused ID after JSON replacement and a queued newer local publication", async () => {
+  const f = fixture(); await f.importJson(); const stale = selectedPosition(f);
+  await f.importJson(documentAt(0.8)); clearPositionEffects(f);
+  expect(typeof f.session.setShapePosition).toBe("function");
+  await expect(f.session.setShapePosition(stale)).rejects.toThrow(); expectNoPositionEffects(f);
+  const selected = selectedPosition(f);
+  const replacement = f.importJson(documentAt(0.6));
+  const candidateIndex = f.deps.revisionId.mock.results.length;
+  const position = f.session.setShapePosition(selected);
+  const candidateResult = f.deps.revisionId.mock.results[candidateIndex]!;
+  expect(candidateResult.type).toBe("return");
+  const candidateRevisionId = candidateResult.value;
+  await replacement; const current = f.session.workspace.current!;
+  await expect(position).rejects.toThrow(); expect(f.session.workspace.current).toBe(current);
+  expect(candidateRevisionId).not.toBe(current.revision.revisionId);
+  expect(await f.persistence.readRevision("document-1", candidateRevisionId)).toBeNull();
+  const winner = createCompleteRevision({ documentId: "document-1", revisionId: current.revision.revisionId,
+    sequence: 3, document: documentAt(0.6) });
+  expect(current.revision).toEqual(winner);
+  expect(await f.persistence.readRevision("document-1", winner.revisionId)).toEqual(winner);
+  expect(await f.persistence.readPointers("document-1")).toEqual({ saved: null,
+    draft: { kind: "draft", documentId: "document-1", revisionId: winner.revisionId, sequence: 3 } });
+});
+
+it("position retains saved PNG history and each useful decoded handle through preparation and later imports", async () => {
+  const f = fixture(); await f.importJson();
+  await f.session.importWorkflow({ kind: "image-import", file: new File([bytes], "image.png", { type: "image/png" }) });
+  const original = f.session.workspace.current!; const saved = createSavedRevisionPointer(original.revision);
+  const retained = original.workspace.images[0]!.handle;
+  await f.persistence.writeCompleteRevision(original.revision, { saved, draft: (await f.persistence.readPointers("document-1")).draft });
+  // This fixture changed the full durable pointer snapshot externally. Explicit
+  // public reload refreshes its live authority; production editing never rebases.
+  const allocated = f.deps.revisionId.mock.calls.length;
+  const source = await f.session.reload();
+  expect(f.session.workspace.current).toBe(source);
+  expect(source.revision).toEqual(original.revision);
+  expect(source.workspace.images[0]!.handle).toBe(retained);
+  expect(f.deps.revisionId).toHaveBeenCalledTimes(allocated);
+  const asset = await f.persistence.readAsset(await sha256(bytes));
+  const expected = structuredClone(source.revision.document); Object.assign(expected.elements[0]!, { x: -2.5, y: 7.25 });
+  clearPositionEffects(f); expect(typeof f.session.setShapePosition).toBe("function");
+  await f.session.setShapePosition(selectedPosition(f));
+  expect(f.session.workspace.current?.revision).toMatchObject({ sequence: 3, document: expected });
+  expect(f.session.workspace.current?.workspace.images[0]!.handle).toBe(retained);
+  expect(f.readAsset).toHaveBeenCalled(); expect(f.decodePng).toHaveBeenCalled(); expect(f.writeAsset).not.toHaveBeenCalled();
+  for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(handle === retained ? 0 : 1);
+  expect(await f.persistence.readAsset(await sha256(bytes))).toEqual(asset);
+  expect((await f.persistence.readPointers("document-1")).saved).toEqual(saved);
+  expect(await f.persistence.readRevision("document-1", source.revision.revisionId)).toEqual(source.revision);
+  f.readAsset.mockRejectedValueOnce(new Error("prehydration fault")); const current = f.session.workspace.current;
+  const pointers = await f.persistence.readPointers("document-1");
+  await expect(f.session.setShapePosition(selectedPosition(f, 9, 10))).rejects.toThrow();
+  expect(f.session.workspace.current).toBe(current);
+  expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+  expect(await f.persistence.readRevision("document-1", "revision-4")).toBeNull();
+  expect(f.session.workspace.current?.workspace.images[0]!.handle).toBe(retained);
+  for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(handle === retained ? 0 : 1);
+  await f.importJson(documentAt(0.6)); expect(f.session.workspace.current?.revision.sequence).toBe(4);
+  expect(f.handles.find((handle) => handle === retained)!.close).toHaveBeenCalledTimes(1);
+  f.deps.elementIdSource.mockReturnValue({ kind: "id", id: "later-image" });
+  await f.session.importWorkflow({ kind: "image-import", file: new File([bytes], "later.png", { type: "image/png" }) });
+  expect(f.session.workspace.current?.revision.sequence).toBe(5);
+  f.deps.elementIdSource.mockReturnValue({ kind: "id", id: "later-rectangle" });
+  await f.session.addRectangle(rectangleGeometry); expect(f.session.workspace.current?.revision.sequence).toBe(6);
+  f.session.workspace.current!.release(); f.session.cache.clear();
+  for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
+});
+
 const rectangleGeometry = { x: 16, y: 24, width: 120, height: 80 };
 function appendedRectangle(document: SceneDocumentV1, id = "image-1") {
   const expected = structuredClone(document);

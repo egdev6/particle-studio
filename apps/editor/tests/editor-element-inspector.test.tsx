@@ -32,14 +32,14 @@ const canonical = canonicalizeSceneDocument(authored);
 const documentData = freeze(JSON.parse(new TextDecoder().decode(canonical.bytes)) as SceneDocumentV1);
 const source = (documentId = "doc", revisionId = "rev") => ({ documentId, revisionId, document: documentData });
 afterEach(() => { document.body.replaceChildren(); vi.restoreAllMocks(); });
-function fixture() {
+function fixture(onSelectionChange?: () => void) {
   const select = document.createElement("select"); select.setAttribute("aria-label", "Scene element");
   const details = document.createElement("pre"); details.setAttribute("aria-label", "Published element JSON");
   const status = document.createElement("p"); status.setAttribute("role", "status");
   status.setAttribute("aria-label", "Element inspection status");
   document.body.append(select, details, status);
   const add = vi.spyOn(select, "addEventListener"); const remove = vi.spyOn(select, "removeEventListener");
-  const controls = mountEditorElementInspector({ select, details, status });
+  const controls = mountEditorElementInspector({ select, details, status, onSelectionChange });
   const choose = (id: string) => { select.value = id; select.dispatchEvent(new Event("change")); };
   const snapshot = () => ({ value: select.value, disabled: select.disabled,
     options: Array.from(select.options, (option) => [option.value, option.textContent]),
@@ -52,7 +52,7 @@ it("validates canonical fixtures and exposes frozen UI-only methods and one owne
   expect(validateSceneDocument(authored).ok).toBe(true);
   expect(documentData).toEqual(authored); expect(Object.isFrozen(documentData)).toBe(true);
   const f = fixture(); expect(Object.isFrozen(f.controls)).toBe(true);
-  expect(Object.keys(f.controls).sort()).toEqual(["dispose", "setBusy", "setCurrent", "setReady"]);
+  expect(Object.keys(f.controls).sort()).toEqual(["dispose", "getSelection", "setBusy", "setCurrent", "setReady"]);
   expect(f.add).toHaveBeenCalledTimes(1); expect(f.add.mock.calls[0]![0]).toBe("change");
   f.controls.dispose(); f.controls.dispose(); expect(f.remove).toHaveBeenCalledTimes(1);
   expect(f.remove.mock.calls[0]).toEqual(f.add.mock.calls[0]);
@@ -140,6 +140,54 @@ it("drops a selected ID absent from an otherwise same-identity metadata refresh"
     elements: [{ id: "root", type: "group", childrenIds: [] }] };
   f.controls.setCurrent({ ...source(), document });
   expect(f.select.value).toBe(""); expect(f.details.textContent).toBe("");
+});
+
+it.each(authored.elements.map((element) => element.id))(
+  "borrows a frozen identity-only token for %s, including all nonshape variants", (id) => {
+    const f = fixture(); f.ready(); f.choose(id);
+    const token = f.controls.getSelection();
+    expect(token).toEqual({ documentId: "doc", revisionId: "rev", elementId: id });
+    expect(Object.isFrozen(token)).toBe(true);
+    expect(Object.keys(token!).sort()).toEqual(["documentId", "elementId", "revisionId"]);
+    expect(token).not.toHaveProperty("document"); expect(token).not.toHaveProperty("release");
+    f.controls.setBusy(true); f.choose("text");
+    expect(f.controls.getSelection()).toEqual(token); expect(f.select.value).toBe(id);
+    f.controls.setBusy(false); expect(f.controls.getSelection()).toEqual(token);
+  },
+);
+
+it("notifies meaningful valid selection changes only, never busy/same-source refreshes", () => {
+  const changed = vi.fn(); const f = fixture(changed);
+  expect(f.controls.getSelection()).toBeNull();
+  f.ready(); changed.mockClear(); f.choose("shape");
+  expect(changed).toHaveBeenCalledTimes(1);
+  f.choose("shape"); f.controls.setCurrent(source());
+  f.controls.setBusy(true); f.choose("image"); f.controls.setBusy(false);
+  expect(changed).toHaveBeenCalledTimes(1);
+  f.controls.setReady(false); expect(f.controls.getSelection()).toBeNull();
+  expect(changed).toHaveBeenCalledTimes(2);
+  f.controls.setReady(true); expect(f.controls.getSelection()?.elementId).toBe("shape");
+  expect(changed).toHaveBeenCalledTimes(3);
+  f.controls.setCurrent(source("doc", "new"));
+  expect(f.controls.getSelection()).toBeNull(); expect(changed).toHaveBeenCalledTimes(4);
+  f.choose("shape"); f.controls.setCurrent(null);
+  expect(f.controls.getSelection()).toBeNull(); expect(changed).toHaveBeenCalledTimes(6);
+  f.controls.setCurrent(source()); f.choose("shape"); changed.mockClear();
+  f.controls.dispose(); expect(f.controls.getSelection()).toBeNull();
+  expect(changed).toHaveBeenCalledTimes(1);
+  f.controls.dispose(); f.choose("image"); f.controls.setCurrent(source());
+  expect(f.controls.getSelection()).toBeNull(); expect(changed).toHaveBeenCalledTimes(1);
+});
+
+it("invalid options and missing remembered IDs cannot fabricate a selection token", () => {
+  const changed = vi.fn(); const f = fixture(changed); f.ready(); f.choose("shape");
+  const option = document.createElement("option"); option.value = "forged"; f.select.append(option);
+  changed.mockClear(); f.choose("forged");
+  expect(f.controls.getSelection()).toBeNull(); expect(changed).toHaveBeenCalledTimes(1);
+  f.choose("shape"); f.controls.setCurrent({ ...source(), document: {
+    ...authored, tracks: [], elements: [{ id: "root", type: "group", childrenIds: [] }],
+  } });
+  expect(f.controls.getSelection()).toBeNull(); expect(f.select.value).toBe("");
 });
 
 it("freezes DOM after idempotent disposal and ignores late current/ready/busy and owned events", () => {

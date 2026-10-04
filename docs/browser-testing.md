@@ -45,7 +45,7 @@ all-stores rollback, cleanup or garbage collection is promised.
 **Add rectangle** needs a genuine current, with editable root scene coordinates
 x/y/width/height defaulting to 16/24/120/80 and fixed opacity 1. Positions must be
 finite and sizes positive/finite; empty inputs fail visibly. No JSON or File is
-needed after explicit creation. JSON, creation, PNG and rectangle share one owned
+needed after explicit creation. JSON, creation, PNG, rectangle and position share one owned
 action lane and UI activity. Rectangle dispatch is human-UI `create-element` through
 a fresh durable bridge, command revision 0 and captured source.sequence+1, with
 `expectedSource` and fresh native CAS. It never reloads/retries/rebases automatically.
@@ -63,13 +63,25 @@ Vite builds the entry but does not typecheck it; use the separate check below.
 Choose **Scene element** after creating/importing/restoring a genuine draft.
 **Published element JSON** shows exact authored fields for every element variant,
 including structural groups and image asset metadata, never resource handles,
-evaluated track values or unsent Editable JSON. No automatic selection or editing
-is added. Document/revision identity changes and page refresh clear selection;
+evaluated track values or unsent Editable JSON. There is no automatic selection. Document/revision identity changes and page refresh clear selection;
 rejected same-source actions retain it. Empty/saved-only, pending startup, corrupt,
 missing-context and disposed states disable inspection. Shared pending actions
 identify retained detail's source; settlement refreshes actual current even when
 publication committed but rendering failed. Inspection itself performs no resource,
 persistence, runtime or canvas work; existing owners still handle bitmap cleanup.
+
+## Edit a selected shape position
+
+Select a shape, edit **Position X/Y**, then **Apply position**. Coordinates are
+atomic authored/local values, including under group transforms; blank/nonfinite
+fields fail, negative/fractional values are valid. Nonshape variants stay inspectable
+but cannot apply. The source-bound human command preserves stable ID and all other
+fields; stale selection or competing-tab publication never triggers a rebase.
+Equal coordinates publish an ordinary new revision/sequence/pointer and clear
+selection. Explicitly reselect after success; same-source rejection retains input.
+Named **Position status** reports committed-but-render-failed warnings truthfully,
+while inspection refreshes from actual current. All five actions share the lane.
+Position disposal precedes inspector disposal; existing owners await settlement.
 
 ## Verify browser behavior
 
@@ -77,7 +89,7 @@ persistence, runtime or canvas work; existing owners still handle bitmap cleanup
 npm run test:browser
 npx vitest run --project core apps/editor/tests/browser-png-platform.test.ts apps/editor/tests/browser-editor-session.test.ts
 npm run validator:prepare
-npx vitest run --project ui apps/editor/tests/editor-element-inspector.test.tsx
+npx vitest run --project ui apps/editor/tests/editor-element-inspector.test.tsx apps/editor/tests/editor-position-controls.test.tsx
 npx tsc -p apps/editor/tsconfig.json --noEmit --pretty false
 ```
 
@@ -139,3 +151,12 @@ never reuses existing servers:
   post-CAS before-clear rendering failure, both pagehide outcomes and startup gates.
   CI explicitly selects the inspector UI test and preview spec without dropping
   any previous selection.
+  `set-shape-position.spec.ts` adds visible root/transformed nested edits with
+  independent pixels, complete canonical/native history and cold-reload checks.
+  Real PNG rows and individual bitmap identities remain covered through replacement;
+  readonly pointer barriers exercise native CAS winners without altering readwrite
+  requests. Five-action programmatic exclusion, equal publication/selection reset,
+  retained rejected input, committed render warnings and both pagehide outcomes
+  use the built entry. Existing inspector startup gates also require position
+  controls to remain disabled. CI selects the position UI test and native spec
+  without removing any previous core/UI/browser selections.
