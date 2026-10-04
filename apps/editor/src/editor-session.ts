@@ -43,6 +43,15 @@ export interface ShapePositionRequest {
   readonly y: number;
 }
 
+/** One selected published shape and its atomic authored width/height pair. */
+export interface ShapeDimensionsRequest {
+  readonly documentId: string;
+  readonly revisionId: string;
+  readonly elementId: string;
+  readonly width: number;
+  readonly height: number;
+}
+
 export interface EditorSession {
   readonly workspace: DurableDraftWorkspace;
   readonly cache: PngImageCache;
@@ -51,6 +60,7 @@ export interface EditorSession {
   createAgent(): EditorBrowserAgentWorkspaceResult;
   addRectangle(geometry: RectangleGeometry): Promise<void>;
   setShapePosition(request: ShapePositionRequest): Promise<void>;
+  setShapeDimensions(request: ShapeDimensionsRequest): Promise<void>;
 }
 
 /**
@@ -190,6 +200,47 @@ export function createEditorSession(deps: EditorSessionDependencies): EditorSess
         payload: { type: "set-shape-position", elementId, x, y },
       });
       if (!result.ok) throw new Error(`EDITOR_SHAPE_POSITION_${result.error.code}`);
+    },
+    setShapeDimensions: async (request: ShapeDimensionsRequest): Promise<void> => {
+      let dimensions: ShapeDimensionsRequest;
+      try {
+        if (request === null || typeof request !== "object" || Array.isArray(request)) {
+          throw new Error();
+        }
+        dimensions = Object.freeze({ documentId: request.documentId, revisionId: request.revisionId,
+          elementId: request.elementId, width: request.width, height: request.height });
+      } catch { throw new Error("EDITOR_SHAPE_DIMENSIONS_INPUT_INVALID"); }
+      const current = workspace.current;
+      if (!current || current.revision.documentId !== captured.documentId ||
+        !Number.isSafeInteger(current.revision.sequence) || current.revision.sequence < 0 ||
+        !Number.isSafeInteger(current.revision.sequence + 1)) {
+        throw new Error("EDITOR_SHAPE_DIMENSIONS_SOURCE_UNAVAILABLE");
+      }
+      const { documentId, revisionId: selectedRevisionId, elementId, width, height } = dimensions;
+      if (typeof documentId !== "string" || !documentId ||
+        typeof selectedRevisionId !== "string" || !selectedRevisionId ||
+        typeof elementId !== "string" || !elementId ||
+        documentId !== current.revision.documentId || selectedRevisionId !== current.revision.revisionId) {
+        throw new Error("EDITOR_SHAPE_DIMENSIONS_SOURCE_MISMATCH");
+      }
+      const element = current.revision.document.elements.find((candidate) => candidate.id === elementId);
+      if (element?.type !== "shape" || typeof width !== "number" || typeof height !== "number" ||
+        !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        throw new Error("EDITOR_SHAPE_DIMENSIONS_INPUT_INVALID");
+      }
+      // Bind the validated caller selection before metadata callbacks can change
+      // source intent. The existing queued source guard and CAS remain authoritative.
+      const bridge = createEditorDurableEditing({ workspace,
+        revisionId: () => revisionId, createdAt: () => createdAt });
+      if (!bridge.ok) throw new Error("EDITOR_SHAPE_DIMENSIONS_SOURCE_UNAVAILABLE");
+      const commandId = captured.commandId();
+      const revisionId = captured.revisionId();
+      const createdAt = captured.createdAt();
+      const result = await bridge.editing.dispatch({ commandSchemaVersion: 1,
+        commandId, documentId, expectedRevision: 0, actorCapability: "human-ui",
+        payload: { type: "set-shape-dimensions", elementId, width, height },
+      });
+      if (!result.ok) throw new Error(`EDITOR_SHAPE_DIMENSIONS_${result.error.code}`);
     },
     createAgent: (): EditorBrowserAgentWorkspaceResult => {
       const current = workspace.current;

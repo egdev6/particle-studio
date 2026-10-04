@@ -336,6 +336,222 @@ it("composes JSON, editing, PNG, stale rejection, explicit new agents and warm r
   for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
 });
 
+type DimensionsRequest = { documentId: string; revisionId: string; elementId: string; width: number; height: number };
+function selectedDimensions(f: ReturnType<typeof fixture>, width = 2.5, height = 7.25): DimensionsRequest {
+  const source = f.session.workspace.current!.revision;
+  return { documentId: source.documentId, revisionId: source.revisionId, elementId: "shape-1", width, height };
+}
+
+it.each(["root", "nested", "equal", "initial-zero-negative", "maximum"])(
+  "dimensions publishes exact %s content with a fresh human bridge and captured intent", async (kind) => {
+    const f = fixture();
+    const document = documentAt(0.4);
+    document.seed = 99; document.loop = false; document.playbackRange.startUs = 500_000;
+    Object.assign(document.elements[0]!, { width: 31, height: 47, opacity: 0.6,
+      transform: [1, 0.5, 0, 2, 10, -20], visible: false });
+    if (kind === "initial-zero-negative") Object.assign(document.elements[0]!, { width: 0, height: -4 });
+    if (kind === "nested") {
+      document.rootIds = ["group"];
+      document.elements.push({ id: "group", type: "group", childrenIds: ["shape-1"], transform: [1, 0, 0, 1, 30, 40] });
+    }
+    await f.importJson(document);
+    const source = f.session.workspace.current!;
+    expect(source.revision.document).toEqual(document);
+    expect(typeof f.session.setShapeDimensions).toBe("function");
+    const input = selectedDimensions(f, kind === "equal" ? 31 : kind === "maximum" ? Number.MAX_VALUE : 2.5,
+      kind === "equal" ? 47 : kind === "maximum" ? Number.MAX_VALUE : 7.25);
+    const expected = structuredClone(document);
+    Object.assign(expected.elements[0]!, { width: input.width, height: input.height });
+    const reads: string[] = [];
+    const captured = { ...input };
+    for (const key of Object.keys(input) as (keyof DimensionsRequest)[]) {
+      Object.defineProperty(captured, key, { get() { reads.push(key); return input[key]; } });
+    }
+    const real = durableEditing.createEditorDurableEditing;
+    const dispatch = vi.fn(); const publish = vi.fn();
+    const bridge = vi.spyOn(durableEditing, "createEditorDurableEditing").mockImplementation((options) => {
+      const result = real({ ...options, workspace: { get current() { return options.workspace.current; },
+        publish: (request) => { publish(request); return options.workspace.publish(request); },
+        reload: options.workspace.reload.bind(options.workspace) } });
+      if (!result.ok) return result;
+      return { ok: true, editing: { snapshot: result.editing.snapshot.bind(result.editing),
+        undo: result.editing.undo.bind(result.editing), redo: result.editing.redo.bind(result.editing),
+        dispatch: (command) => { dispatch(command); return result.editing.dispatch(command); } } };
+    });
+    clearPositionEffects(f);
+    f.deps.commandId.mockImplementation(() => {
+      Object.assign(input, { documentId: "foreign", revisionId: "retargeted", elementId: "group", width: 999, height: 999 });
+      return "dimension-command";
+    });
+    const flight = f.session.setShapeDimensions(captured);
+    expect(reads.sort()).toEqual(Object.keys(input).sort());
+    input.width = 888; input.height = 888;
+    await flight;
+    const shape = expected.elements[0]!;
+    if (shape.type !== "shape") throw new Error("fixture shape required");
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith({ commandSchemaVersion: 1, commandId: "dimension-command",
+      documentId: "document-1", expectedRevision: 0, actorCapability: "human-ui",
+      payload: { type: "set-shape-dimensions", elementId: "shape-1", width: shape.width, height: shape.height } });
+    expect(publish.mock.calls[0]![0]).toMatchObject({ sequence: 2,
+      expectedSource: { documentId: "document-1", revisionId: source.revision.revisionId } });
+    await expectDurable(f, "revision-2", 2, expected);
+    expect(reads.sort()).toEqual(Object.keys(input).sort());
+    expect(await f.persistence.readRevision("document-1", source.revision.revisionId)).toEqual(source.revision);
+    expect(f.deps.elementIdSource).not.toHaveBeenCalled();
+    expect(f.writeRevision).toHaveBeenCalledTimes(1);
+    for (const spy of [f.deps.commandId, f.deps.revisionId, f.deps.createdAt]) expect(spy).toHaveBeenCalledTimes(1);
+    await f.session.setShapeDimensions(selectedDimensions(f, shape.width, shape.height));
+    expect(bridge).toHaveBeenCalledTimes(2);
+    expect(dispatch.mock.calls[1]![0]).toMatchObject({ expectedRevision: 0 });
+    await expectDurable(f, "revision-3", 3, expected);
+  },
+);
+
+const invalidDimensions = [0, -0, -1, NaN, Infinity, -Infinity, "4", null, undefined] as const;
+it.each([
+  ...invalidDimensions.map((width) => ["width", { width }] as const),
+  ...invalidDimensions.map((height) => ["height", { height }] as const),
+  ["missing document", { documentId: "" }], ["foreign document", { documentId: "foreign" }],
+  ["nonstring document", { documentId: 3 }], ["missing revision", { revisionId: "" }],
+  ["stale revision", { revisionId: "old" }], ["nonstring revision", { revisionId: null }],
+  ["missing target", { elementId: "" }], ["unknown target", { elementId: "unknown" }],
+  ["nonstring target", { elementId: 3 }], ["group target", { elementId: "group" }],
+] as const)("dimensions rejects %s before effects (%j)", async (_name, invalid) => {
+  const f = fixture(); const document = documentAt(0.4);
+  document.elements.push({ id: "group", type: "group", childrenIds: [] }); document.rootIds.push("group");
+  await f.importJson(document);
+  const current = f.session.workspace.current!; const pointers = await f.persistence.readPointers("document-1");
+  clearPositionEffects(f);
+  expect(typeof f.session.setShapeDimensions).toBe("function");
+  await expect(f.session.setShapeDimensions({ ...selectedDimensions(f), ...invalid } as DimensionsRequest))
+    .rejects.toThrow(/EDITOR_SHAPE_DIMENSIONS_/);
+  expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+  expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+  expect(await f.persistence.readRevision("document-1", current.revision.revisionId)).toEqual(current.revision);
+});
+
+it.each([null, undefined, {}, [], "request", 3])("dimensions rejects malformed request %j without effects", async (input) => {
+  const f = fixture(); await f.importJson(); const current = f.session.workspace.current;
+  clearPositionEffects(f);
+  expect(typeof f.session.setShapeDimensions).toBe("function");
+  await expect(f.session.setShapeDimensions(input as DimensionsRequest)).rejects.toThrow(/EDITOR_SHAPE_DIMENSIONS_/);
+  expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+});
+
+it.each(["missing", "foreign", "overflow", "released"])("dimensions rejects %s live current before effects", async (kind) => {
+  const f = fixture();
+  if (kind !== "missing") await f.session.workspace.publish({ documentId: kind === "foreign" ? "foreign" : "document-1",
+    editableJson: JSON.stringify(documentAt(0.4)), revisionId: () => "source",
+    sequence: kind === "overflow" ? Number.MAX_SAFE_INTEGER : 1, createdAt: () => 1234 });
+  if (kind === "released") f.session.workspace.current!.release();
+  const current = f.session.workspace.current; clearPositionEffects(f);
+  expect(typeof f.session.setShapeDimensions).toBe("function");
+  await expect(f.session.setShapeDimensions({ documentId: "document-1", revisionId: "source", elementId: "shape-1", width: 1, height: 2 }))
+    .rejects.toThrow(/EDITOR_SHAPE_DIMENSIONS_/);
+  expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+});
+
+it.each(["line", "text", "particle", "image"] as const)("dimensions rejects genuine %s targets before effects", async (type) => {
+  const f = fixture(); await f.importJson();
+  if (type === "image") await f.session.importWorkflow({ kind: "image-import", file: new File([bytes], "image.png", { type: "image/png" }) });
+  else {
+    const document = documentAt(0.4);
+    const element = type === "line" ? { id: "nonshape", type, x1: 0, y1: 0, x2: 1, y2: 1, opacity: 1 }
+      : type === "text" ? { id: "nonshape", type, x: 0, y: 0, text: "authored", fontSize: 12, opacity: 1 }
+      : { id: "nonshape", type, count: 1, x: 0, y: 0, velocityX: 1, velocityY: 1, spread: 1, size: 1, opacity: 1, lifetimeSteps: 1 };
+    document.elements.push(element); document.rootIds.push("nonshape"); await f.importJson(document);
+  }
+  const current = f.session.workspace.current!; const pointers = await f.persistence.readPointers("document-1");
+  clearPositionEffects(f); expect(typeof f.session.setShapeDimensions).toBe("function");
+  await expect(f.session.setShapeDimensions({ ...selectedDimensions(f), elementId: type === "image" ? "image-1" : "nonshape" }))
+    .rejects.toThrow(/EDITOR_SHAPE_DIMENSIONS_/);
+  expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+  expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+  expect(await f.persistence.readRevision("document-1", current.revision.revisionId)).toEqual(current.revision);
+});
+
+it("dimensions refuses reused IDs and a queued newer publication without writing its allocated candidate", async () => {
+  const f = fixture(); await f.importJson(); const stale = selectedDimensions(f);
+  expect(typeof f.session.setShapeDimensions).toBe("function");
+  await f.importJson(documentAt(0.8)); clearPositionEffects(f);
+  await expect(f.session.setShapeDimensions(stale)).rejects.toThrow(/EDITOR_SHAPE_DIMENSIONS_/);
+  expectNoPositionEffects(f);
+  const selected = selectedDimensions(f); const replacement = f.importJson(documentAt(0.6));
+  const candidateIndex = f.deps.revisionId.mock.results.length;
+  const flight = f.session.setShapeDimensions(selected);
+  const candidate = f.deps.revisionId.mock.results[candidateIndex]!;
+  expect(candidate.type).toBe("return");
+  Object.assign(selected, { revisionId: "retargeted", elementId: "missing", width: 999, height: 999 });
+  await replacement; const winner = f.session.workspace.current!;
+  await expect(flight).rejects.toThrow(/EDITOR_SHAPE_DIMENSIONS_/);
+  expect(f.session.workspace.current).toBe(winner);
+  expect(candidate.value).not.toBe(winner.revision.revisionId);
+  expect(await f.persistence.readRevision("document-1", candidate.value)).toBeNull();
+  await expectDurable(f, winner.revision.revisionId, 3, documentAt(0.6));
+});
+
+it.each(["preparation", "conditional-conflict"])("dimensions preserves truthful durable state on %s and recovers", async (fault) => {
+  const f = fixture(); await f.importJson(); const source = f.session.workspace.current!;
+  expect(typeof f.session.setShapeDimensions).toBe("function");
+  const pointers = await f.persistence.readPointers("document-1");
+  const winner = createCompleteRevision({ documentId: "document-1", revisionId: "external-winner", sequence: 2, document: documentAt(0.8) });
+  if (fault === "preparation") f.readPointers.mockRejectedValueOnce(new Error("prepare failed"));
+  else {
+    const realWrite = f.writeRevision.getMockImplementation()!;
+    f.writeRevision.mockImplementationOnce(async (...args) => {
+      await f.persistence.writeCompleteRevision(winner, { saved: null,
+        draft: { kind: "draft", documentId: "document-1", revisionId: winner.revisionId, sequence: 2 } });
+      return realWrite(...args);
+    });
+  }
+  await expect(f.session.setShapeDimensions(selectedDimensions(f))).rejects.toThrow(/EDITOR_SHAPE_DIMENSIONS_/);
+  expect(f.session.workspace.current).toBe(source);
+  expect(await f.persistence.readRevision("document-1", "revision-2")).toBeNull();
+  expect(await f.persistence.readRevision("document-1", source.revision.revisionId)).toEqual(source.revision);
+  if (fault === "preparation") expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+  else {
+    expect(await f.persistence.readRevision("document-1", winner.revisionId)).toEqual(winner);
+    expect((await f.persistence.readPointers("document-1")).draft?.revisionId).toBe(winner.revisionId);
+    await f.session.reload();
+  }
+  await f.session.setShapeDimensions(selectedDimensions(f));
+  expect(f.session.workspace.current?.revision.sequence).toBe(fault === "preparation" ? 2 : 3);
+});
+
+it("dimensions retains saved PNG metadata and individual bitmap ownership through failure and later imports", async () => {
+  const f = fixture(); await f.importJson();
+  await f.session.importWorkflow({ kind: "image-import", file: new File([bytes], "image.png", { type: "image/png" }) });
+  const original = f.session.workspace.current!; const saved = createSavedRevisionPointer(original.revision);
+  const retained = original.workspace.images[0]!.handle;
+  await f.persistence.writeCompleteRevision(original.revision, { saved, draft: (await f.persistence.readPointers("document-1")).draft });
+  const source = await f.session.reload(); // Refresh full canonical prior after explicit external fixture write.
+  expect(source.workspace.images[0]!.handle).toBe(retained);
+  const asset = await f.persistence.readAsset(await sha256(bytes));
+  const expected = structuredClone(source.revision.document); Object.assign(expected.elements[0]!, { width: 2.5, height: 7.25 });
+  clearPositionEffects(f); expect(typeof f.session.setShapeDimensions).toBe("function");
+  await f.session.setShapeDimensions(selectedDimensions(f));
+  expect(f.session.workspace.current?.revision).toMatchObject({ sequence: 3, document: expected });
+  expect(f.session.workspace.current?.workspace.images[0]!.handle).toBe(retained);
+  expect(f.readAsset).toHaveBeenCalled(); expect(f.decodePng).toHaveBeenCalled(); expect(f.writeAsset).not.toHaveBeenCalled();
+  for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(handle === retained ? 0 : 1);
+  const current = f.session.workspace.current!; const pointers = await f.persistence.readPointers("document-1");
+  f.readAsset.mockRejectedValueOnce(new Error("prehydration fault"));
+  await expect(f.session.setShapeDimensions(selectedDimensions(f, 9, 10))).rejects.toThrow(/EDITOR_SHAPE_DIMENSIONS_/);
+  expect(f.session.workspace.current).toBe(current); expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+  expect(await f.persistence.readRevision("document-1", "revision-4")).toBeNull();
+  expect(await f.persistence.readRevision("document-1", source.revision.revisionId)).toEqual(source.revision);
+  expect(await f.persistence.readAsset(await sha256(bytes))).toEqual(asset); expect(pointers.saved).toEqual(saved);
+  for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(handle === retained ? 0 : 1);
+  await f.importJson(documentAt(0.6)); expect(f.session.workspace.current?.revision.sequence).toBe(4);
+  f.deps.elementIdSource.mockReturnValue({ kind: "id", id: "later-image" });
+  await f.session.importWorkflow({ kind: "image-import", file: new File([bytes], "later.png", { type: "image/png" }) });
+  expect(f.session.workspace.current?.revision.sequence).toBe(5);
+  f.deps.elementIdSource.mockReturnValue({ kind: "id", id: "later-rectangle" });
+  await f.session.addRectangle(rectangleGeometry); expect(f.session.workspace.current?.revision.sequence).toBe(6);
+  f.session.workspace.current!.release(); f.session.cache.clear();
+  for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
+});
+
 type PositionRequest = { documentId: string; revisionId: string; elementId: string; x: number; y: number };
 function selectedPosition(f: ReturnType<typeof fixture>, x = -2.5, y = 7.25): PositionRequest {
   const source = f.session.workspace.current!.revision;
