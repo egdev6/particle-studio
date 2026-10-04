@@ -1,7 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import { FIRST_SLICE_DOCUMENT } from "@particle-studio/scene-document";
-import { createBrowserEditorSession } from "../src/browser-editor-session.js";
+import { createBrowserEditorSession, type BrowserCurrent } from "../src/browser-editor-session.js";
+import type { ShapeDimensionsRequest } from "../src/editor-session.js";
+import { renderEditorFrame, type EditorFrameContext } from "../src/editor-frame.js";
 
 const mocks = vi.hoisted(() => ({ session: vi.fn(), persistence: vi.fn() }));
 vi.mock("../src/editor-session.js", () => ({ createEditorSession: mocks.session }));
@@ -113,6 +115,11 @@ it("captures the validated startup floor and blocks import after startup failure
   await failed.dispose();
 });
 
+// The test declares the forthcoming API without implementing it; runtime assertions must go RED.
+type DimensionsBrowser = ReturnType<typeof createBrowserEditorSession> & {
+  setShapeDimensions(request: ShapeDimensionsRequest): Promise<BrowserCurrent | null>;
+};
+
 // Real session/workflow/IDB below: only the platform bitmap boundary is substituted.
 async function pngFixture() {
   vi.stubGlobal("indexedDB", new IDBFactory());
@@ -132,7 +139,7 @@ async function pngFixture() {
   }));
   mocks.persistence.mockReturnValue(persistence);
   mocks.session.mockImplementation(real.createEditorSession);
-  const browser = createBrowserEditorSession();
+  const browser = createBrowserEditorSession() as DimensionsBrowser;
   const gate = deferred<ArrayBuffer>();
   const file = new File([new Uint8Array([1, 2, 3])], "image.png", { type: "image/png" });
   const read = vi.spyOn(file, "arrayBuffer").mockReturnValue(gate.promise);
@@ -468,4 +475,115 @@ it("rectangle fails closed after corrupt startup before reading geometry", async
   expect(readGeometry).not.toHaveBeenCalled();
   expect(f.writeRevision).not.toHaveBeenCalled(); expect(f.writeAsset).not.toHaveBeenCalled();
   await f.browser.dispose();
+});
+
+it("dimensions freezes five read-once scalars before the owned action callback and returns actual current", async () => {
+  const pending = deferred<void>(); const release = vi.fn(); const clear = vi.fn();
+  const revision = { documentId: "browser-document", revisionId: "source", sequence: 1, document: FIRST_SLICE_DOCUMENT };
+  const previous = { revision, workspace: { images: [] }, release }; const workspace = { current: previous };
+  const input = { documentId: revision.documentId, revisionId: revision.revisionId, elementId: "shape-1", width: 9, height: 13 };
+  const expected = { ...input }; const reads: string[] = [];
+  const request = { ...input };
+  for (const key of Object.keys(input) as (keyof typeof input)[]) {
+    Object.defineProperty(request, key, { get() { reads.push(key); return input[key]; } });
+  }
+  const setShapeDimensions = vi.fn(async (captured: typeof input) => {
+    expect(captured).toEqual(expected); expect(Object.isFrozen(captured)).toBe(true);
+    expect(reads).toEqual(Object.keys(input)); // Before any callback mutation or await.
+    Object.assign(input, { documentId: "foreign", revisionId: "late", elementId: "reused", width: 999, height: 999 });
+    await expect(browser.setShapeDimensions(input)).rejects.toThrow(); // SDK callback cannot reenter the owned lane.
+    await pending.promise;
+    expect(captured).toEqual(expected);
+    workspace.current = { ...previous, revision: { ...revision, revisionId: "actual", sequence: 2 } };
+  });
+  mocks.persistence.mockReturnValue({ readPointers: async () => ({ draft: revision, saved: null }) });
+  mocks.session.mockReturnValue({ workspace, cache: { clear }, reload: async () => previous, setShapeDimensions });
+  const browser = createBrowserEditorSession() as DimensionsBrowser; await browser.start();
+  expect(typeof browser.setShapeDimensions).toBe("function");
+  const flight = browser.setShapeDimensions(request); expect(browser.current?.revision).toBe(revision);
+  pending.resolve(); const next = await flight;
+  expect(next).toBe(browser.current); expect(next?.revision).toBe(workspace.current.revision);
+  expect(next?.revision.revisionId).toBe("actual"); expect(next).not.toHaveProperty("release");
+  expect(reads).toEqual(Object.keys(input)); expect(setShapeDimensions).toHaveBeenCalledTimes(1);
+  await browser.dispose(); expect(release).toHaveBeenCalledTimes(1); expect(clear).toHaveBeenCalledTimes(1);
+});
+
+it.each([false, true])("real dimensions owns all six lanes and bitmap settlement (reject=%s)", async (reject) => {
+  const f = await pngFixture(); await f.browser.start(); await f.browser.importJson(f.json);
+  f.gate.resolve(new Uint8Array([1, 2, 3]).buffer); await f.browser.importPng(f.file, f.rectangle);
+  expect(typeof f.browser.setShapeDimensions).toBe("function");
+  const source = f.browser.current!;
+  const input = { documentId: source.revision.documentId, revisionId: source.revision.revisionId,
+    elementId: "shape-1", width: 9.5, height: 13.25 };
+  const asset = await f.persistence.readAsset(source.images[0]!.sha256);
+  const gate = deferred<typeof asset>(); f.readAsset.mockClear().mockImplementationOnce(() => gate.promise);
+  const flight = f.browser.setShapeDimensions(input);
+  Object.assign(input, { documentId: "foreign", revisionId: "late", elementId: source.revision.document.elements.at(-1)!.id, width: 999, height: 999 });
+  await vi.waitFor(() => expect(f.readAsset).toHaveBeenCalledTimes(1));
+  for (const action of [() => f.browser.setShapeDimensions(input), () => f.browser.setShapePosition({ ...input, x: 1, y: 2 }),
+    () => f.browser.addRectangle(f.rectangle), () => f.browser.importJson(f.json),
+    () => f.browser.importPng(f.file, f.rectangle), () => f.browser.createScene()]) await expect(action()).rejects.toThrow();
+  expect(f.browser.current).toBe(source);
+  const disposal = f.browser.dispose(); expect(f.browser.dispose()).toBe(disposal); expect(f.browser.current).toBeNull();
+  const retained = source.images[0]!.handle as { close: ReturnType<typeof vi.fn> };
+  expect(retained.close).not.toHaveBeenCalled();
+  if (reject) gate.reject(new Error("dimensions image fault")); else gate.resolve(asset);
+  if (reject) await expect(flight).rejects.toThrow(); else await expect(flight).resolves.toBeNull();
+  await disposal;
+  const pointers = await f.persistence.readPointers("browser-document");
+  const row = await f.persistence.readRevision("browser-document", pointers.draft!.revisionId);
+  const expected = structuredClone(source.revision.document);
+  if (!reject) Object.assign(expected.elements.find((element) => element.id === "shape-1")!, { width: 9.5, height: 13.25 });
+  expect(row?.document).toEqual(expected); expect(row?.sequence).toBe(reject ? 2 : 3);
+  expect(f.writeAsset).toHaveBeenCalledTimes(1); expect(f.writeRevision).toHaveBeenCalledTimes(reject ? 2 : 3);
+  expect(new Set(f.handles).size).toBe(f.handles.length);
+  for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
+  await expect(f.browser.setShapeDimensions(input)).rejects.toThrow();
+});
+
+it("dimensions guards reject before effects, preserve current, and recover after same-source failure", async () => {
+  const f = await pngFixture(); await f.browser.start();
+  const scene = { ...FIRST_SLICE_DOCUMENT, rootIds: [...FIRST_SLICE_DOCUMENT.rootIds, "group-1"],
+    elements: [...FIRST_SLICE_DOCUMENT.elements, { id: "group-1", type: "group" as const, childrenIds: [] }] };
+  await f.browser.importJson(JSON.stringify(scene));
+  expect(typeof f.browser.setShapeDimensions).toBe("function"); const source = f.browser.current!;
+  const input = { documentId: source.revision.documentId, revisionId: source.revision.revisionId, elementId: "shape-1", width: 9, height: 13 };
+  const ids = vi.spyOn(crypto, "randomUUID"); ids.mockClear(); f.readPointers.mockClear();
+  for (const invalid of [{ documentId: "foreign" }, { revisionId: "old" }, { elementId: "absent" },
+    { elementId: source.revision.document.elements.find((element) => element.type !== "shape")!.id },
+    { width: NaN }, { height: Infinity }, { width: 0 }, { height: -1 }]) {
+    await expect(f.browser.setShapeDimensions({ ...input, ...invalid })).rejects.toThrow();
+  }
+  expect(ids).not.toHaveBeenCalled(); expect(f.readPointers).not.toHaveBeenCalled(); expect(f.browser.current).toBe(source);
+  f.readPointers.mockRejectedValueOnce(new Error("preparation failed"));
+  await expect(f.browser.setShapeDimensions(input)).rejects.toThrow(); expect(f.browser.current).toBe(source);
+  const next = await f.browser.setShapeDimensions(input); expect(next).toBe(f.browser.current); expect(next?.revision.sequence).toBe(2);
+  await expect(f.browser.setShapeDimensions(input)).rejects.toThrow(); await f.browser.dispose();
+});
+
+it("dimensions publishes actual current before a real frame failure; rendering cannot roll it back", async () => {
+  const f = await pngFixture(); await f.browser.start(); await f.browser.importJson(f.json);
+  const source = f.browser.current!; expect(typeof f.browser.setShapeDimensions).toBe("function");
+  const next = await f.browser.setShapeDimensions({ documentId: source.revision.documentId, revisionId: source.revision.revisionId,
+    elementId: "shape-1", width: 9, height: 13 });
+  const clearRect = vi.fn(() => { throw new Error("render fault after commit"); });
+  expect(() => renderEditorFrame({ clearRect } as unknown as EditorFrameContext,
+    next!.revision.document, next!.images, 0, { width: 320, height: 160 })).toThrow("render fault after commit");
+  expect(clearRect).toHaveBeenCalledTimes(1); expect(f.browser.current).toBe(next);
+  expect(next?.revision.document.elements.find((element) => element.id === "shape-1")).toMatchObject({ width: 9, height: 13 });
+  const pointers = await f.persistence.readPointers("browser-document");
+  expect(await f.persistence.readRevision("browser-document", pointers.draft!.revisionId)).toEqual(next!.revision);
+  await f.browser.dispose();
+});
+
+it.each([false, true])("dimensions rejects unavailable startup before reading caller getters (corrupt=%s)", async (corrupt) => {
+  const f = await pngFixture();
+  if (corrupt) { f.readPointers.mockRejectedValueOnce(new Error("corrupt")); await expect(f.browser.start()).rejects.toThrow("corrupt"); }
+  expect(typeof f.browser.setShapeDimensions).toBe("function");
+  const get = vi.fn(() => { throw new Error("caller getter"); });
+  const input = Object.defineProperty({ documentId: "browser-document", revisionId: "source", elementId: "shape-1", width: 1, height: 2 }, "width", { get });
+  const ids = vi.spyOn(crypto, "randomUUID"); ids.mockClear(); f.readPointers.mockClear();
+  await expect(f.browser.setShapeDimensions(input)).rejects.toThrow(/EDITOR_SHAPE_DIMENSIONS_/);
+  expect(get).not.toHaveBeenCalled(); expect(ids).not.toHaveBeenCalled(); expect(f.readPointers).not.toHaveBeenCalled();
+  expect(f.writeRevision).not.toHaveBeenCalled(); await f.browser.dispose();
 });

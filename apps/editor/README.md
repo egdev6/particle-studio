@@ -135,8 +135,8 @@ winners and resolving/rejecting pagehide. Startup gates remain in the inspector 
 ## Shape dimensions SDK (issue #116, chain PR1)
 
 `EditorSession.setShapeDimensions({documentId, revisionId, elementId, width, height})`
-is a source-bound durable SDK action only: no browser facade method or visible UI
-is introduced in PR1. It captures all five scalars once before callbacks/awaits;
+is the source-bound durable SDK action introduced in PR1, mirrored by the browser
+facade in PR2 without visible dimensions UI. It captures all five scalars once before callbacks/awaits;
 a genuine live matching publication, root/nested shape and sequence room are required.
 Both new dimensions must be finite positive numbers (fractions are valid), checked
 before IDs/time or asset/persistence I/O. Existing schema-valid zero/negative source
@@ -148,7 +148,23 @@ equal pairs still publish a new durable revision, sequence and pointer. Bounded
 PNG prehydration retains useful handles and closes duplicates once; the existing
 owner awaits settlement before cleanup. Core session tests use the real workspace
 and IndexedDB adapter with fake-indexeddb, not native Chromium dimension proof.
-Browser-facade, DOM and production UI/native proofs belong to later chain units.
+
+## Browser dimensions API (issue #116, chain PR2)
+
+`createBrowserEditorSession().setShapeDimensions(request)` mirrors the SDK request.
+It rejects disposed/not-ready/busy/no-current state before reading caller getters,
+then reads and freezes exactly five scalars before entering the owned lane or SDK
+callbacks. Throwing getters/malformed requests reject with bounded input errors.
+JSON, blank, PNG, rectangle, position and dimensions now share six-action exclusion,
+including direct API calls. SDK source/type/pair/sequence guards remain authoritative;
+there is no retry, rebase or element-ID allocation. Schema-valid zero/negative
+source sizes remain importable; both requested sizes must be finite and positive.
+Success returns actual current as borrowed rendering data, never release authority.
+Rendering belongs to the caller: a postcommit render failure cannot undo publication.
+Disposal returns null current immediately, awaits resolving/rejecting owned work,
+then releases publication/cache once; callers must suppress late frame/DOM updates.
+The native API fixture proves dimensions independently of a production controller;
+visible dimensions controls and built-entry proof remain later chain units.
 
 Run `npm run validator:prepare` before
 `npx vitest run --project core apps/editor/tests/editor-frame.test.ts`.
