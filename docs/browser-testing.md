@@ -58,12 +58,26 @@ output and releases publication/cache only after owned startup/import work settl
 it neither cancels queued publication nor closes/deletes the production database.
 Vite builds the entry but does not typecheck it; use the separate check below.
 
+## Inspect a published element
+
+Choose **Scene element** after creating/importing/restoring a genuine draft.
+**Published element JSON** shows exact authored fields for every element variant,
+including structural groups and image asset metadata, never resource handles,
+evaluated track values or unsent Editable JSON. No automatic selection or editing
+is added. Document/revision identity changes and page refresh clear selection;
+rejected same-source actions retain it. Empty/saved-only, pending startup, corrupt,
+missing-context and disposed states disable inspection. Shared pending actions
+identify retained detail's source; settlement refreshes actual current even when
+publication committed but rendering failed. Inspection itself performs no resource,
+persistence, runtime or canvas work; existing owners still handle bitmap cleanup.
+
 ## Verify browser behavior
 
 ```sh
 npm run test:browser
 npx vitest run --project core apps/editor/tests/browser-png-platform.test.ts apps/editor/tests/browser-editor-session.test.ts
 npm run validator:prepare
+npx vitest run --project ui apps/editor/tests/editor-element-inspector.test.tsx
 npx tsc -p apps/editor/tsconfig.json --noEmit --pretty false
 ```
 
@@ -116,3 +130,12 @@ never reuses existing servers:
   every existing preview spec; CI also explicitly selects the new rectangle UI test.
   Core tests focus on owned workflow settlement; distinct jsdom controls tests check
   readiness, input capture, single flight and listener removal without React.
+  `element-inspector.spec.ts` adds genuine blank/rectangle/nested variants/PNG
+  publication checks with independently expected canonical JSON and full native
+  row/cardinality, pixel and per-bitmap comparisons. Inspection-only instrumentation
+  requires zero I/O, lookup, decode/close, evaluation or painting; legitimate
+  publication prehydration is outside that window. Real readonly pointer-result
+  barriers leave readwrite CAS unchanged while covering pending actions, rejection,
+  post-CAS before-clear rendering failure, both pagehide outcomes and startup gates.
+  CI explicitly selects the inspector UI test and preview spec without dropping
+  any previous selection.
