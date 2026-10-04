@@ -1,4 +1,7 @@
 import type { ElementIdSource } from "@particle-studio/commands";
+import { createEditorDurableEditing } from "./editor-durable-editing.js";
+
+type RectangleGeometry = Pick<EditorImageImportGeometry, "x" | "y" | "width" | "height">;
 import {
   importDurablePngAsset, type DurablePngAssetPort, type Sha256,
 } from "./durable-png-import.js";
@@ -37,6 +40,7 @@ export interface EditorSession {
   readonly importWorkflow: EditorImportWorkflow;
   reload(): ReturnType<DurableDraftWorkspace["reload"]>;
   createAgent(): EditorBrowserAgentWorkspaceResult;
+  addRectangle(geometry: RectangleGeometry): Promise<void>;
 }
 
 /**
@@ -109,6 +113,37 @@ export function createEditorSession(deps: EditorSessionDependencies): EditorSess
   return Object.freeze({
     workspace, cache, importWorkflow,
     reload: () => workspace.reload({ documentId: captured.documentId }),
+    addRectangle: async (geometry: RectangleGeometry): Promise<void> => {
+      const current = workspace.current;
+      if (current === null || current.revision.documentId !== captured.documentId ||
+        !Number.isSafeInteger(current.revision.sequence) || current.revision.sequence < 0 ||
+        !Number.isSafeInteger(current.revision.sequence + 1)) {
+        throw new Error("EDITOR_RECTANGLE_SOURCE_UNAVAILABLE");
+      }
+      // Initialize from the genuine source before reading inputs or generating
+      // metadata. The helper captures/clones it and never rebases this attempt.
+      const bridge = createEditorDurableEditing({ workspace,
+        revisionId: () => revisionId, createdAt: () => createdAt,
+        commandElementIdSource: () => ({ ...elementId }),
+      });
+      if (!bridge.ok) throw new Error(bridge.error.code);
+      const rectangle = { x: geometry.x, y: geometry.y, width: geometry.width, height: geometry.height };
+      if (!Object.values(rectangle).every(Number.isFinite) || rectangle.width <= 0 || rectangle.height <= 0) {
+        throw new Error("EDITOR_RECTANGLE_GEOMETRY_INVALID");
+      }
+      // Bridge dispatch is queued: constant callbacks protect this activation's
+      // identity/time even if caller-owned sources change before publication.
+      const commandId = captured.commandId();
+      const elementId = { ...captured.elementIdSource() };
+      const revisionId = captured.revisionId();
+      const createdAt = captured.createdAt();
+      const result = await bridge.editing.dispatch({ commandSchemaVersion: 1,
+        commandId, documentId: captured.documentId, expectedRevision: 0,
+        actorCapability: "human-ui", payload: { type: "create-element",
+          element: { type: "shape", ...rectangle, opacity: 1 } },
+      });
+      if (!result.ok) throw new Error(result.error.code);
+    },
     createAgent: (): EditorBrowserAgentWorkspaceResult => {
       const current = workspace.current;
       if (current === null || current.revision.documentId !== captured.documentId) {

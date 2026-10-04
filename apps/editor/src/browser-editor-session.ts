@@ -80,8 +80,8 @@ export function createBrowserEditorSession() {
     })();
     return flight;
   };
-  const ownImport = (request: Parameters<typeof session.importWorkflow>[0]): Promise<BrowserCurrent | null> => {
-    // Own and lock the flight before entering the workflow, whose source/IDs/
+  const ownAction = (action: () => Promise<unknown>): Promise<BrowserCurrent | null> => {
+    // Own and lock the flight before entering the action, whose source/IDs/
     // geometry capture and File read begin synchronously. No queued second action.
     let resolve!: (view: BrowserCurrent | null) => void;
     let reject!: (error: unknown) => void;
@@ -91,13 +91,13 @@ export function createBrowserEditorSession() {
       importBusy = false; importFlight = undefined; placement = undefined;
     });
     try {
-      void session.importWorkflow(request).then(() => currentView()).then(resolve, reject);
+      void action().then(() => currentView()).then(resolve, reject);
     } catch (error) { reject(error); }
     return importFlight;
   };
   const importJson = (editableJson: string): Promise<BrowserCurrent | null> => {
     if (disposed || !ready || importBusy) return Promise.reject(new Error("EDITOR_JSON_IMPORT_UNAVAILABLE"));
-    return ownImport({ kind: "editable-json-import", editableJson });
+    return ownAction(() => session.importWorkflow({ kind: "editable-json-import", editableJson }));
   };
   const createScene = (): Promise<BrowserCurrent | null> => {
     if (disposed || !ready || importBusy || session.workspace.current !== null) {
@@ -115,7 +115,18 @@ export function createBrowserEditorSession() {
         throw new Error("EDITOR_PNG_PLACEMENT_INVALID");
       }
       placement = Object.freeze(captured);
-      return ownImport({ kind: "image-import", file });
+      return ownAction(() => session.importWorkflow({ kind: "image-import", file }));
+    } catch (error) { return Promise.reject(error); }
+  };
+  const addRectangle = (rectangle: PngPlacement): Promise<BrowserCurrent | null> => {
+    if (disposed || !ready || importBusy) return Promise.reject(new Error("EDITOR_RECTANGLE_UNAVAILABLE"));
+    if (!currentView()) return Promise.reject(new Error("Create a scene or import JSON first to create an editable document."));
+    try {
+      const geometry = { x: rectangle.x, y: rectangle.y, width: rectangle.width, height: rectangle.height };
+      if (!Object.values(geometry).every(Number.isFinite) || geometry.width <= 0 || geometry.height <= 0) {
+        throw new Error("EDITOR_RECTANGLE_GEOMETRY_INVALID");
+      }
+      return ownAction(() => session.addRectangle(geometry));
     } catch (error) { return Promise.reject(error); }
   };
   const dispose = (): Promise<void> => {
@@ -129,6 +140,6 @@ export function createBrowserEditorSession() {
     });
     return disposal;
   };
-  return Object.freeze({ start, createScene, importJson, importPng, dispose,
+  return Object.freeze({ start, createScene, importJson, importPng, addRectangle, dispose,
     get current() { return currentView(); }, get disposed() { return disposed; } });
 }

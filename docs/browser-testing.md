@@ -42,6 +42,17 @@ PNG with **Create a scene or import JSON**, never silently creating a draft from
 PNG verification/decode/stale-source errors preserve documents/pointers/current
 and frame, but may leave immutable asset bytes already written. No universal
 all-stores rollback, cleanup or garbage collection is promised.
+**Add rectangle** needs a genuine current, with editable root scene coordinates
+x/y/width/height defaulting to 16/24/120/80 and fixed opacity 1. Positions must be
+finite and sizes positive/finite; empty inputs fail visibly. No JSON or File is
+needed after explicit creation. JSON, creation, PNG and rectangle share one owned
+action lane and UI activity. Rectangle dispatch is human-UI `create-element` through
+a fresh durable bridge, command revision 0 and captured source.sequence+1, with
+`expectedSource` and fresh native CAS. It never reloads/retries/rebases automatically.
+Fields, groups, tracks, playback and image references remain intact. No asset bytes
+are written; canonical PNG reread/redecode may close new duplicates once while
+retained handles stay alive until owner settlement. Named rectangle feedback does
+not replace the primary unnamed status on failure.
 There is no animation, autosave or seeding. `pagehide` suppresses late
 output and releases publication/cache only after owned startup/import work settles;
 it neither cancels queued publication nor closes/deletes the production database.
@@ -95,5 +106,13 @@ never reuses existing servers:
   all-canvas blank alpha, saved retention, refresh identity and real PNG insertion.
   Native pointer-read gates cover winners before/during preparation, failures and
   pagehide resolution/rejection without image decoding. Existing cases remain selected.
+  `rectangle-create.spec.ts` proves actual blank/PNG-current shape publication,
+  independently expected geometry/canonical rows/pixels, unchanged asset rows and
+  same-identity refresh. Native readonly result barriers leave readwrite CAS fresh:
+  winners before/during preparation survive without rebase. Geometry/preparation/
+  image faults and absent/saved-only/corrupt/context gates remain non-destructive.
+  Pagehide resolution/rejection freezes DOM/frame/aria-busy while owned work settles,
+  then closes each retained/duplicate bitmap exactly once. It is selected alongside
+  every existing preview spec; CI also explicitly selects the new rectangle UI test.
   Core tests focus on owned workflow settlement; distinct jsdom controls tests check
   readiness, input capture, single flight and listener removal without React.

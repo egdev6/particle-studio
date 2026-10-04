@@ -31,6 +31,21 @@
       <button id="import-png" type="submit" disabled>Import PNG</button>
     </form>
     <p id="png-status" role="status" aria-label="PNG import status" aria-live="polite" aria-atomic="true">Loading local scene…</p>
+    <form id="rectangle-create" aria-label="Rectangle creation controls" aria-busy="false" novalidate>
+      <fieldset>
+        <legend>Rectangle in root scene units (opacity 1)</legend>
+        <label for="rectangle-x">Rectangle x</label>
+        <input id="rectangle-x" type="number" step="any" value="16" disabled />
+        <label for="rectangle-y">Rectangle y</label>
+        <input id="rectangle-y" type="number" step="any" value="24" disabled />
+        <label for="rectangle-width">Rectangle width</label>
+        <input id="rectangle-width" type="number" step="any" value="120" disabled />
+        <label for="rectangle-height">Rectangle height</label>
+        <input id="rectangle-height" type="number" step="any" value="80" disabled />
+      </fieldset>
+      <button id="add-rectangle" type="submit" disabled>Add rectangle</button>
+    </form>
+    <p id="rectangle-status" role="status" aria-label="Rectangle creation status" aria-live="polite" aria-atomic="true">Loading local scene…</p>
     <p id="status" role="status">Loading local scene…</p>
     <canvas id="scene" width="256" height="160" aria-label="Current scene"></canvas>
     <script type="module" src="/src/editor-canvas-entry.ts"></script>

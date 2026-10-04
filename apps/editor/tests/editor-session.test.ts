@@ -8,6 +8,7 @@ import {
 } from "@particle-studio/persistence-indexeddb";
 import { createCompleteRevision, createSavedRevisionPointer } from "@particle-studio/persistence";
 import { createEditorSession, type EditorSessionDependencies } from "../src/editor-session.js";
+import * as durableEditing from "../src/editor-durable-editing.js";
 
 const bytes = new Uint8Array([1, 2, 3]);
 const sha256 = async (input: Uint8Array): Promise<string> => {
@@ -332,5 +333,192 @@ it("composes JSON, editing, PNG, stale rejection, explicit new agents and warm r
   expect(f.session.createAgent()).toEqual(initFailure);
   f.session.cache.clear();
   f.session.cache.clear();
+  for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
+});
+
+const rectangleGeometry = { x: 16, y: 24, width: 120, height: 80 };
+function appendedRectangle(document: SceneDocumentV1, id = "image-1") {
+  const expected = structuredClone(document);
+  expected.rootIds.push(id);
+  expected.elements.push({ id, type: "shape", ...rectangleGeometry, opacity: 1 });
+  return expected;
+}
+
+it("rectangle uses a fresh real human command and captures source, geometry and metadata before await", async () => {
+  const f = fixture();
+  await f.importJson();
+  const source = f.session.workspace.current!;
+  const real = durableEditing.createEditorDurableEditing;
+  const dispatches: ReturnType<typeof vi.fn>[] = [];
+  const publications: ReturnType<typeof vi.fn>[] = [];
+  const bridges = vi.spyOn(durableEditing, "createEditorDurableEditing").mockImplementation((options) => {
+    // The workspace facade is frozen; observe its real publish through a
+    // call-through view instead of trying to replace its owned method.
+    const publish = vi.fn(options.workspace.publish.bind(options.workspace));
+    publications.push(publish);
+    const workspace = { get current() { return options.workspace.current; },
+      publish, reload: options.workspace.reload.bind(options.workspace) };
+    const result = real({ ...options, workspace });
+    if (result.ok) {
+      const dispatch = vi.fn(result.editing.dispatch.bind(result.editing));
+      dispatches.push(dispatch);
+      return { ok: true, editing: { dispatch, snapshot: result.editing.snapshot.bind(result.editing),
+        undo: result.editing.undo.bind(result.editing), redo: result.editing.redo.bind(result.editing) } };
+    }
+    return result;
+  });
+  const geometry = { ...rectangleGeometry, opacity: 0.1, ignored: "not a command field" };
+  const identity = { kind: "id" as const, id: "rectangle-captured" };
+  f.deps.elementIdSource.mockReturnValue(identity);
+  f.deps.revisionId.mockReturnValue("rectangle-revision");
+  const flight = f.session.addRectangle(geometry);
+  expect(f.deps.commandId).toHaveBeenCalledTimes(1);
+  expect(f.deps.elementIdSource).toHaveBeenCalledTimes(1);
+  expect(f.deps.revisionId).toHaveBeenCalledTimes(2);
+  expect(f.deps.createdAt).toHaveBeenCalledTimes(2);
+  geometry.x = 999; identity.id = "retargeted";
+  f.deps.revisionId.mockReturnValue("retargeted");
+  f.deps.createdAt.mockReturnValue(9999);
+  await expect(flight).resolves.toBeUndefined();
+  expect(bridges).toHaveBeenCalledTimes(1);
+  expect(dispatches[0]).toHaveBeenCalledExactlyOnceWith({ commandSchemaVersion: 1,
+    commandId: "image-command", documentId: "document-1", expectedRevision: 0,
+    actorCapability: "human-ui", payload: { type: "create-element",
+      element: { type: "shape", ...rectangleGeometry, opacity: 1 } } });
+  const options = publications[0]!.mock.calls[0]![0];
+  expect(options).toMatchObject({ documentId: "document-1", sequence: 2,
+    expectedSource: { documentId: "document-1", revisionId: source.revision.revisionId } });
+  expect(options.revisionId()).toBe("rectangle-revision");
+  expect(options.createdAt()).toBe(1234);
+  await expectDurable(f, "rectangle-revision", 2, appendedRectangle(documentAt(0.4), "rectangle-captured"));
+  f.deps.elementIdSource.mockReturnValue({ kind: "id", id: "second-rectangle" });
+  f.deps.revisionId.mockReturnValue("second-revision");
+  f.deps.createdAt.mockReturnValue(1234);
+  await f.session.addRectangle(rectangleGeometry);
+  expect(bridges).toHaveBeenCalledTimes(2);
+  expect(dispatches[1]!.mock.calls[0]![0]).toMatchObject({ expectedRevision: 0 });
+  expect(f.session.workspace.current?.revision.sequence).toBe(3);
+  expect(f.writeAsset).not.toHaveBeenCalled();
+});
+
+it.each(["missing", "foreign", "overflow", "released"])(
+  "rectangle rejects %s current before geometry, IDs, time or persistence", async (kind) => {
+    const f = fixture();
+    if (kind !== "missing") {
+      await f.session.workspace.publish({ documentId: kind === "foreign" ? "foreign" : "document-1",
+        editableJson: JSON.stringify(documentAt(0.4)), revisionId: () => "source",
+        sequence: kind === "overflow" ? Number.MAX_SAFE_INTEGER : 7, createdAt: () => 1234 });
+      if (kind === "released") f.session.workspace.current!.release();
+    }
+    const before = f.session.workspace.current;
+    const readGeometry = vi.fn(() => { throw new Error("geometry read"); });
+    const geometry = Object.defineProperty({}, "x", { get: readGeometry });
+    f.readPointers.mockClear(); f.writeRevision.mockClear();
+    await expect(f.session.addRectangle(geometry as typeof rectangleGeometry)).rejects.toThrow();
+    expect(f.session.workspace.current).toBe(before);
+    expect(readGeometry).not.toHaveBeenCalled();
+    for (const spy of [f.readPointers, f.writeRevision, f.deps.commandId, f.deps.elementIdSource,
+      f.deps.revisionId, f.deps.createdAt]) expect(spy).not.toHaveBeenCalled();
+  },
+);
+
+it.each([{ x: NaN }, { y: Infinity }, { width: 0 }, { width: Infinity }, { height: -1 }])(
+  "rectangle rejects invalid geometry %j without metadata or writes", async (invalid) => {
+    const f = fixture(); await f.importJson();
+    const before = f.session.workspace.current;
+    const pointers = await f.persistence.readPointers("document-1");
+    f.writeRevision.mockClear(); f.deps.revisionId.mockClear(); f.deps.createdAt.mockClear();
+    await expect(f.session.addRectangle({ ...rectangleGeometry, ...invalid })).rejects.toThrow();
+    expect(f.session.workspace.current).toBe(before);
+    expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+    for (const spy of [f.writeRevision, f.deps.commandId, f.deps.elementIdSource,
+      f.deps.revisionId, f.deps.createdAt]) expect(spy).not.toHaveBeenCalled();
+  },
+);
+
+it("rectangle converts a real rejected command into failure, not unchanged-current success", async () => {
+  const f = fixture(); await f.importJson();
+  f.deps.elementIdSource.mockReturnValue({ kind: "id", id: "shape-1" });
+  const before = f.session.workspace.current;
+  const pointers = await f.persistence.readPointers("document-1");
+  f.writeRevision.mockClear();
+  await expect(f.session.addRectangle(rectangleGeometry)).rejects.toThrow();
+  expect(f.writeRevision).not.toHaveBeenCalled();
+  expect(f.session.workspace.current).toBe(before);
+  expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+});
+
+it.each(["preparation", "conditional-write"])("rectangle preserves publication on %s failure", async (fault) => {
+  const f = fixture(); await f.importJson();
+  const before = f.session.workspace.current;
+  const pointers = await f.persistence.readPointers("document-1");
+  if (fault === "preparation") f.readPointers.mockRejectedValueOnce(new Error("prepare failed"));
+  else f.writeRevision.mockRejectedValueOnce(new Error("write failed"));
+  await expect(f.session.addRectangle(rectangleGeometry)).rejects.toThrow();
+  expect(f.session.workspace.current).toBe(before);
+  expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+  expect(await f.persistence.readRevision("document-1", "revision-2")).toBeNull();
+});
+
+it("rectangle preserves a rich PNG current, bitmap leases and saved history; later imports use live sequence", async () => {
+  const f = fixture();
+  const document = documentAt(0.4);
+  document.seed = 99; document.loop = false;
+  document.playbackRange.startUs = 500_000;
+  document.rootIds = ["group"];
+  document.elements.push({ id: "group", type: "group", childrenIds: ["shape-1"] });
+  const saved = createCompleteRevision({ documentId: "document-1", revisionId: "saved",
+    sequence: 0, document });
+  await f.persistence.writeCompleteRevision(saved, { saved: createSavedRevisionPointer(saved), draft: null });
+  await f.importJson(document);
+  await f.session.importWorkflow({ kind: "image-import",
+    file: new File([bytes], "image.png", { type: "image/png" }) });
+  const source = f.session.workspace.current!;
+  const retained = source.workspace.images[0]!.handle as { close: ReturnType<typeof vi.fn> };
+  const expected = appendedRectangle(source.revision.document, "rectangle-1");
+  const assetBefore = await f.persistence.readAsset(await sha256(bytes));
+  const decodes = f.decodePng.mock.calls.length;
+  f.deps.elementIdSource.mockReturnValue({ kind: "id", id: "rectangle-1" });
+  f.writeAsset.mockClear();
+  await f.session.addRectangle(rectangleGeometry);
+  const current = f.session.workspace.current!;
+  expect(current.revision).toMatchObject({ sequence: 3, document: expected });
+  expect(current.workspace.images[0]!.handle).toBe(retained);
+  expect(f.decodePng.mock.calls.length).toBeGreaterThan(decodes);
+  expect(retained.close).not.toHaveBeenCalled();
+  for (const handle of f.handles) if (handle !== retained) expect(handle.close).toHaveBeenCalledTimes(1);
+  expect(f.writeAsset).not.toHaveBeenCalled();
+  expect(await f.persistence.readAsset(await sha256(bytes))).toEqual(assetBefore);
+  expect(await f.persistence.readRevision("document-1", "saved")).toEqual(saved);
+  expect((await f.persistence.readPointers("document-1")).saved).toEqual(createSavedRevisionPointer(saved));
+  await f.importJson(documentAt(0.6));
+  expect(f.session.workspace.current?.revision.sequence).toBe(4);
+  expect(f.session.workspace.current?.workspace.images).toEqual([]);
+  expect(retained.close).toHaveBeenCalledTimes(1); // Last image lease ended at JSON replacement.
+  f.deps.elementIdSource.mockReturnValue({ kind: "id", id: "later-image" });
+  await f.session.importWorkflow({ kind: "image-import",
+    file: new File([bytes], "later.png", { type: "image/png" }) });
+  expect(f.session.workspace.current?.revision.sequence).toBe(5);
+  const laterRetained = f.session.workspace.current!.workspace.images[0]!.handle as { close: ReturnType<typeof vi.fn> };
+  expect(laterRetained).not.toBe(retained);
+  expect(laterRetained.close).not.toHaveBeenCalled();
+  f.deps.elementIdSource.mockReturnValue({ kind: "id", id: "later-rectangle" });
+  await f.session.addRectangle(rectangleGeometry);
+  expect(f.session.workspace.current?.revision.sequence).toBe(6);
+  expect(f.session.workspace.current?.workspace.images[0]!.handle).toBe(laterRetained);
+  expect(laterRetained.close).not.toHaveBeenCalled();
+  const beforeFailure = f.session.workspace.current;
+  const pointers = await f.persistence.readPointers("document-1");
+  f.deps.elementIdSource.mockReturnValue({ kind: "id", id: "failed-rectangle" });
+  f.readAsset.mockRejectedValueOnce(new Error("referenced image fault"));
+  await expect(f.session.addRectangle(rectangleGeometry)).rejects.toThrow();
+  expect(f.session.workspace.current).toBe(beforeFailure);
+  expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+  expect(await f.persistence.readAsset(await sha256(bytes))).toEqual(assetBefore);
+  expect(f.session.workspace.current?.workspace.images[0]!.handle).toBe(laterRetained);
+  expect(laterRetained.close).not.toHaveBeenCalled();
+  expect(retained.close).toHaveBeenCalledTimes(1);
+  f.session.workspace.current!.release(); f.session.cache.clear();
+  expect(new Set(f.handles).size).toBe(f.handles.length);
   for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
 });
