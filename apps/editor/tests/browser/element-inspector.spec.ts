@@ -24,6 +24,12 @@ async function positionDisabled(page: Page) {
   await expect(page.getByRole("status", { name: "Dimension status", exact: true })).toBeVisible();
   await button(page, "Apply dimensions").dispatchEvent("click");
   await page.locator("#shape-dimensions").dispatchEvent("submit");
+  await expect(button(page, "Apply opacity")).toBeDisabled();
+  await expect(page.getByLabel("Shape opacity", { exact: true })).toBeDisabled();
+  await expect(page.getByLabel("Shape opacity", { exact: true })).toHaveValue("");
+  await expect(page.getByRole("status", { name: "Opacity status", exact: true })).toBeVisible();
+  await button(page, "Apply opacity").dispatchEvent("click");
+  await page.locator("#shape-opacity").dispatchEvent("submit");
 }
 const blank = (): SceneDocumentV1 => ({ schemaVersion: 1, durationUs: 1_000_000, seed: 42, loop: true,
   playbackRange: { startUs: 0, endUs: 1_000_000 }, tracks: [], rootIds: ["root"],
