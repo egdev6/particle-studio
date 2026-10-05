@@ -45,15 +45,15 @@ all-stores rollback, cleanup or garbage collection is promised.
 **Add rectangle** needs a genuine current, with editable root scene coordinates
 x/y/width/height defaulting to 16/24/120/80 and fixed opacity 1. Positions must be
 finite and sizes positive/finite; empty inputs fail visibly. No JSON or File is
-needed after explicit creation. JSON, creation, PNG, rectangle, position and dimensions share one owned
-action lane and UI activity. Rectangle dispatch is human-UI `create-element` through
+needed after explicit creation. JSON, creation, PNG, rectangle, position, dimensions
+and opacity share one owned action lane and UI activity. Rectangle dispatch is human-UI `create-element` through
 a fresh durable bridge, command revision 0 and captured source.sequence+1, with
 `expectedSource` and fresh native CAS. It never reloads/retries/rebases automatically.
 Fields, groups, tracks, playback and image references remain intact. No asset bytes
 are written; canonical PNG reread/redecode may close new duplicates once while
 retained handles stay alive until owner settlement. Named rectangle feedback does
 not replace the primary unnamed status on failure.
-There is no animation, autosave or seeding. `pagehide` suppresses late
+There are no animation controls, autosave or seeding. `pagehide` suppresses late
 output and releases publication/cache only after owned startup/import work settles;
 it neither cancels queued publication nor closes/deletes the production database.
 Vite builds the entry but does not typecheck it; use the separate check below.
@@ -80,8 +80,8 @@ fields; stale selection or competing-tab publication never triggers a rebase.
 Equal coordinates publish an ordinary new revision/sequence/pointer and clear
 selection. Explicitly reselect after success; same-source rejection retains input.
 Named **Position status** reports committed-but-render-failed warnings truthfully,
-while inspection refreshes from actual current. All six actions share the lane.
-Both edit controllers dispose before inspection; existing owners await settlement.
+while inspection refreshes from actual current. All seven actions share the lane.
+All three edit controllers dispose before inspection; existing owners await settlement.
 
 ## Edit selected shape dimensions and verify production UI
 
@@ -126,13 +126,83 @@ publication from rendering failure. This API fixture adds no production renderer
 Local browser selection includes this spec; CI's develop/main branch filters remain
 unchanged and do not authorize child-branch routing changes.
 
+## Browser opacity API proof (issue #122, chain PR3)
+
+`set-shape-opacity-api.spec.ts` is registered in the existing `chromium` playground
+at `http://127.0.0.1:4175/apps/editor/tests/browser/fixtures/browser-opacity-api.fixture.html`.
+Run `npx playwright test --project=chromium set-shape-opacity-api.spec.ts` for focused
+coverage; the configured servers and branch routing are unchanged. The separate
+HTML/TS harness uses the real facade/session, native IndexedDB, SHA/PNG and canvas,
+not the production opacity controls, which have separate built-entry coverage below.
+Healthy JSON/PNG publication, sequence/current metadata and useful pixels precede
+the API assertion. Root/nested untracked black shapes check authored 0/fraction/1
+alpha and equal publication; separately tracked scenes check evaluated override
+truth while preserving authored edits and schema-valid initial -0.25/2 values.
+Independent recursive key-sorted canonical JSON retains array order. Comparisons
+cover full native revision documents/bytes/identifier/length, all history/pointers,
+saved revisions and asset metadata/bytes with independent SHA. Zero shape opacity
+retains useful PNG pixels/handles. Out-of-band saved-pointer setup explicitly uses
+public reload before prior-source comparisons; cold public reload checks persistence.
+Seven genuine origin holds exclude all seven direct owned calls through I/O settlement.
+Barriers delay only readonly pointer results, leaving conditional readwrite CAS
+intact. Before/during-preparation competing durable winners survive; actual eager
+candidate UUIDs are observed, stale candidate rows stay absent, with no retry,
+retarget, rebase or implicit reload. External `renderEditorFrame` failure after commit
+reports the durable winner truthfully; rerender uses the same actual current without
+rollback. Resolving and rejecting disposal await held work, suppress late frame/DOM/
+notifications and close each owned bitmap identity once, including prior duplicates.
+The facade grants borrowed current no release/cache authority and owns no renderer.
+These descriptions specify coverage, not a passing-run or native approval receipt.
+
+## Edit selected shape opacity and verify production UI (issue #122, chain PR5)
+
+Choose a published root/nested shape, edit **Shape opacity**, then **Apply opacity**.
+Matching authored metadata prefills even schema-valid -0.25/2; new requests alone
+require trimmed-nonempty finite [0, 1], accepting 0/-0, fractions, 1 and equal values.
+There is no clamping, migration or track deletion. Tracks can override authored
+opacity at playback start; successful publication need not change rendered pixels.
+Nonshapes stay inspectable/read-only. New document/revision identity clears selection,
+even for stable IDs/equal edits; explicitly reselect. Same-source rejection retains
+selection and typed input. Named **Opacity status** preserves the primary unnamed
+canvas status. All seven actual actions exclude forced/same-turn buttons, forms,
+selection and input events through both shared activity and the backend owned lane.
+All three controllers preserve their own results/render warnings through BEGIN/END;
+both other edit controllers refresh guidance from actual current after source changes.
+Committed render failure never claims rollback, retry, rebase or retargeting.
+
+Run `npx playwright test apps/editor/tests/browser/set-shape-opacity.spec.ts --project=chromium-preview`.
+Its 24 cases use the real built preview at `127.0.0.1:4176`, actual JSON/PNG UI and
+native IndexedDB, not the opacity API harness. Healthy root/nested canonical source,
+useful PNG and primary-frame pixels precede the opacity affordance assertions.
+Independent recursive key sorting retains array order and compares full revision
+content/bytes/identifier/length, all historic/saved rows, pointers and asset metadata/
+bytes with independent SHA. Untracked black shapes check 0/-0/fraction/1/equal alpha
+and cold public reload, including zero and fractional publications; useful PNG
+pixels and retained per-identity handles survive transparent shape edits.
+Separate finite-wide authored sources preserve tracks: independently evaluated
+linear opacity at production playback start 500,000 µs is 0.5/alpha128, not time-zero
+0.25/alpha64. Saved-pointer fixture setup publicly reloads before prior-source checks.
+Seven genuine native holds challenge forced and same-task actions; only readonly
+pointer results are delayed, never conditional readwrite CAS. Actual eager candidate
+UUIDs precede preparation settlement; before/during external winners retain complete
+durable rows with stale candidates absent and no implicit retry/reload.
+Three-controller rejection/success/cross-edit/render-warning cases follow genuine
+source identity. Pending JSON-import/opacity pagehide covers both resolve and reject:
+all three controllers dispose before Inspector's null notification, late DOM/status/
+frame stays frozen, and each native bitmap closes once, including hydration duplicates.
+Existing inspector startup cases add opacity-disabled checks for sample/saved-only,
+pending/corrupt/missing-assets/context/restored-render failures without seeding/promoting.
+These are coverage descriptions, not GREEN, native approval or remote CI receipts.
+Existing servers, both-project registration and develop/main CI filters are unchanged;
+issue #122 closure and final authorized integration/review remain separate.
+
 ## Verify browser behavior
 
 ```sh
 npm run test:browser
 npx vitest run --project core apps/editor/tests/browser-png-platform.test.ts apps/editor/tests/browser-editor-session.test.ts
 npm run validator:prepare
-npx vitest run --project ui apps/editor/tests/editor-element-inspector.test.tsx apps/editor/tests/editor-position-controls.test.tsx apps/editor/tests/editor-dimension-controls.test.tsx
+npx vitest run --project ui apps/editor/tests/editor-element-inspector.test.tsx apps/editor/tests/editor-position-controls.test.tsx apps/editor/tests/editor-dimension-controls.test.tsx apps/editor/tests/editor-opacity-controls.test.tsx
 npx tsc -p apps/editor/tsconfig.json --noEmit --pretty false
 ```
 

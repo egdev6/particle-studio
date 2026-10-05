@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import { FIRST_SLICE_DOCUMENT } from "@particle-studio/scene-document";
 import { createBrowserEditorSession, type BrowserCurrent } from "../src/browser-editor-session.js";
-import type { ShapeDimensionsRequest } from "../src/editor-session.js";
+import type { EditorSession, ShapeDimensionsRequest, ShapeOpacityRequest } from "../src/editor-session.js";
 import { renderEditorFrame, type EditorFrameContext } from "../src/editor-frame.js";
 
 const mocks = vi.hoisted(() => ({ session: vi.fn(), persistence: vi.fn() }));
@@ -586,4 +586,145 @@ it.each([false, true])("dimensions rejects unavailable startup before reading ca
   await expect(f.browser.setShapeDimensions(input)).rejects.toThrow(/EDITOR_SHAPE_DIMENSIONS_/);
   expect(get).not.toHaveBeenCalled(); expect(ids).not.toHaveBeenCalled(); expect(f.readPointers).not.toHaveBeenCalled();
   expect(f.writeRevision).not.toHaveBeenCalled(); await f.browser.dispose();
+});
+
+// Only the anticipated public type is supplied; the missing runtime API is the RED.
+type OpacityBrowser = ReturnType<typeof createBrowserEditorSession> & {
+  setShapeOpacity(request: ShapeOpacityRequest): Promise<BrowserCurrent | null>;
+};
+const opacityOrigins = ["json", "blank", "png", "rectangle", "position", "dimensions", "opacity"] as const;
+
+it("opacity captures four getters once, frozen before SDK callbacks and owned-lane reentry", async () => {
+  const pending = deferred<void>(); const release = vi.fn(); const clear = vi.fn();
+  const revision = { documentId: "browser-document", revisionId: "source", sequence: 1, document: FIRST_SLICE_DOCUMENT };
+  const previous = { revision, workspace: { images: [] }, release }; const workspace = { current: previous };
+  const input = { documentId: revision.documentId, revisionId: revision.revisionId, elementId: "shape-1", opacity: 0.25 };
+  const expected = { ...input }; const reads: string[] = []; const request = { ...input };
+  for (const key of Object.keys(input) as (keyof typeof input)[]) {
+    Object.defineProperty(request, key, { get() { reads.push(key); return input[key]; } });
+  }
+  const setShapeOpacity = vi.fn(async (captured: ShapeOpacityRequest) => {
+    expect(captured).toEqual(expected); expect(Object.isFrozen(captured)).toBe(true); expect(reads).toEqual(Object.keys(input));
+    Object.assign(input, { documentId: "foreign", revisionId: "late", elementId: "root", opacity: 1 });
+    await expect(browser.setShapeOpacity(input)).rejects.toThrow("UNAVAILABLE");
+    await pending.promise; expect(captured).toEqual(expected);
+    workspace.current = { ...previous, revision: { ...revision, revisionId: "actual", sequence: 2 } };
+  });
+  mocks.persistence.mockReturnValue({ readPointers: async () => ({ draft: revision, saved: null }) });
+  mocks.session.mockReturnValue({ workspace, cache: { clear }, reload: async () => previous, setShapeOpacity });
+  const browser = createBrowserEditorSession() as OpacityBrowser; await browser.start();
+  expect(typeof browser.setShapeOpacity).toBe("function"); const flight = browser.setShapeOpacity(request);
+  pending.resolve(); const next = await flight;
+  expect(next).toBe(browser.current); expect(next?.revision).toBe(workspace.current.revision);
+  expect(Object.isFrozen(next)).toBe(true); expect(next).not.toHaveProperty("release"); expect(next).not.toHaveProperty("cache");
+  expect(reads).toEqual(Object.keys(input)); expect(setShapeOpacity).toHaveBeenCalledTimes(1);
+  await browser.dispose(); expect(release).toHaveBeenCalledTimes(1); expect(clear).toHaveBeenCalledTimes(1);
+});
+
+it.each(opacityOrigins)("real held %s owns the lane against all seven direct actions", async (origin) => {
+  const f = await pngFixture(); const browser = f.browser as OpacityBrowser; await browser.start();
+  if (origin !== "blank") {
+    await browser.importJson(f.json); f.gate.resolve(new Uint8Array([1, 2, 3]).buffer);
+    await browser.importPng(f.file, f.rectangle);
+  }
+  expect(typeof browser.setShapeOpacity).toBe("function"); const source = browser.current;
+  const input = { documentId: "browser-document", revisionId: source?.revision.revisionId ?? "absent", elementId: "shape-1", opacity: 0.25 };
+  const actions = {
+    json: () => browser.importJson(f.json), blank: () => browser.createScene(),
+    png: () => browser.importPng(f.file, f.rectangle), rectangle: () => browser.addRectangle(f.rectangle),
+    position: () => browser.setShapePosition({ ...input, x: 1, y: 2 }),
+    dimensions: () => browser.setShapeDimensions({ ...input, width: 9, height: 13 }), opacity: () => browser.setShapeOpacity(input),
+  };
+  const realRead = f.persistence.readPointers.bind(f.persistence);
+  const prior = await realRead("browser-document"); const gate = deferred<typeof prior>();
+  f.readPointers.mockClear().mockImplementationOnce(() => gate.promise);
+  const flight = actions[origin]();
+  if (origin === "opacity") Object.assign(input, { documentId: "foreign", revisionId: "late", elementId: "root", opacity: 1 });
+  await vi.waitFor(() => expect(f.readPointers).toHaveBeenCalledTimes(1));
+  for (const name of opacityOrigins) await expect(actions[name]()).rejects.toThrow();
+  const get = vi.fn(() => { throw new Error("busy getter"); });
+  await expect(browser.setShapeOpacity(Object.defineProperty({ ...input }, "opacity", { get }))).rejects.toThrow("UNAVAILABLE");
+  expect(get).not.toHaveBeenCalled(); expect(browser.current).toBe(source); expect(await realRead("browser-document")).toEqual(prior);
+  gate.resolve(prior); const next = await flight; expect(next).toBe(browser.current);
+  expect(next?.revision.sequence).toBe((source?.revision.sequence ?? 0) + 1);
+  if (origin === "opacity") expect(next?.revision.document.elements.find((element) => element.id === "shape-1")).toMatchObject({ opacity: 0.25 });
+  await browser.dispose(); for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
+});
+
+it.each(["early", "absent", "corrupt", "disposed"])("opacity unavailable %s rejects before caller getters or effects", async (state) => {
+  const f = await pngFixture(); const browser = f.browser as OpacityBrowser;
+  if (state === "corrupt") { f.readPointers.mockRejectedValueOnce(new Error("corrupt")); await expect(browser.start()).rejects.toThrow("corrupt"); }
+  if (state === "absent" || state === "disposed") await browser.start();
+  if (state === "disposed") await browser.dispose();
+  expect(typeof browser.setShapeOpacity).toBe("function"); const get = vi.fn(() => { throw new Error("caller getter"); });
+  const input = Object.defineProperty({ documentId: "browser-document", revisionId: "source", elementId: "shape-1", opacity: 1 }, "opacity", { get });
+  const ids = vi.spyOn(crypto, "randomUUID"); ids.mockClear(); f.readPointers.mockClear();
+  await expect(browser.setShapeOpacity(input)).rejects.toThrow("EDITOR_SHAPE_OPACITY_UNAVAILABLE");
+  expect(get).not.toHaveBeenCalled(); expect(ids).not.toHaveBeenCalled();
+  for (const spy of [f.readPointers, f.readAsset, f.writeAsset, f.writeRevision]) expect(spy).not.toHaveBeenCalled();
+  expect(browser.current).toBeNull(); await browser.dispose();
+});
+
+it("real opacity rejects malformed/source/type/range requests before effects and recovers with 0/-0/fraction/1/equal", async () => {
+  const f = await pngFixture(); const browser = f.browser as OpacityBrowser; await browser.start();
+  const cloned = structuredClone(FIRST_SLICE_DOCUMENT);
+  const group = { id: "opacity-guard-group", type: "group" as const, childrenIds: [], transform: [1, 0, 0, 1, 0, 0] };
+  expect(cloned.elements.some((element) => element.id === group.id)).toBe(false);
+  const document = { ...cloned, rootIds: [...cloned.rootIds, group.id], elements: [...cloned.elements, group] };
+  Object.assign(document.elements.find((element) => element.id === "shape-1")!, { opacity: -0.25 });
+  await browser.importJson(JSON.stringify(document)); expect(typeof browser.setShapeOpacity).toBe("function");
+  const source = browser.current!; const input = { documentId: source.revision.documentId, revisionId: source.revision.revisionId, elementId: "shape-1", opacity: 0.25 };
+  expect(source.revision.document.elements.find((element) => element.type !== "shape")).toEqual(group);
+  const get = vi.fn(() => { throw new Error("caller getter"); });
+  const malformed: unknown[] = [null, undefined, [], 1, "request", Object.defineProperty({ ...input }, "opacity", { get })];
+  const ids = vi.spyOn(crypto, "randomUUID"); ids.mockClear(); f.readPointers.mockClear();
+  for (const request of malformed) await expect(browser.setShapeOpacity(request as ShapeOpacityRequest)).rejects.toThrow("EDITOR_SHAPE_OPACITY_INPUT_INVALID");
+  expect(get).toHaveBeenCalledTimes(1);
+  for (const invalid of [{ documentId: "foreign" }, { revisionId: "old" }, { elementId: "absent" },
+    { elementId: source.revision.document.elements.find((element) => element.type !== "shape")!.id },
+    { opacity: -0.25 }, { opacity: 2 }, { opacity: NaN }, { opacity: Infinity }]) await expect(browser.setShapeOpacity({ ...input, ...invalid })).rejects.toThrow();
+  expect(ids).not.toHaveBeenCalled(); expect(f.readPointers).not.toHaveBeenCalled(); expect(browser.current).toBe(source);
+  expect(f.readAsset).not.toHaveBeenCalled(); expect(f.writeAsset).not.toHaveBeenCalled(); expect(f.writeRevision).toHaveBeenCalledTimes(1);
+  f.readPointers.mockRejectedValueOnce(new Error("preparation failed"));
+  await expect(browser.setShapeOpacity(input)).rejects.toThrow(); expect(browser.current).toBe(source);
+  let sequence = source.revision.sequence;
+  for (const opacity of [0, -0, 0.25, 1, 1]) {
+    const before = browser.current!; const expected = structuredClone(before.revision.document);
+    Object.assign(expected.elements.find((element) => element.id === "shape-1")!, { opacity: opacity === 0 ? 0 : opacity });
+    const next = await browser.setShapeOpacity({ ...input, revisionId: before.revision.revisionId, opacity });
+    expect(next).toBe(browser.current); expect(next?.revision.document).toEqual(expected); expect(next?.revision.sequence).toBe(++sequence);
+    expect(next?.revision.revisionId).not.toBe(before.revision.revisionId);
+  }
+  await expect(browser.setShapeOpacity(input)).rejects.toThrow();
+  const session = mocks.session.mock.results.at(-1)!.value as EditorSession;
+  const releasedRevisionId = browser.current!.revision.revisionId;
+  session.workspace.current!.release(); ids.mockClear(); f.readPointers.mockClear();
+  expect(browser.current).toBeNull();
+  await expect(browser.setShapeOpacity({ ...input, revisionId: releasedRevisionId })).rejects.toThrow("EDITOR_SHAPE_OPACITY_UNAVAILABLE");
+  expect(ids).not.toHaveBeenCalled(); expect(f.readPointers).not.toHaveBeenCalled(); await browser.dispose();
+});
+
+it.each([false, true])("real opacity disposal awaits bitmap preparation and closes each identity once (reject=%s)", async (reject) => {
+  const f = await pngFixture(); const browser = f.browser as OpacityBrowser; await browser.start(); await browser.importJson(f.json);
+  f.gate.resolve(new Uint8Array([1, 2, 3]).buffer); await browser.importPng(f.file, f.rectangle);
+  expect(typeof browser.setShapeOpacity).toBe("function"); const source = browser.current!;
+  const input = { documentId: source.revision.documentId, revisionId: source.revision.revisionId, elementId: "shape-1", opacity: 0 };
+  const asset = await f.persistence.readAsset(source.images[0]!.sha256); const gate = deferred<typeof asset>();
+  f.readAsset.mockClear().mockImplementationOnce(() => gate.promise); const flight = browser.setShapeOpacity(input);
+  await vi.waitFor(() => expect(f.readAsset).toHaveBeenCalledTimes(1)); let settled = false;
+  const disposal = browser.dispose(); void disposal.then(() => { settled = true; });
+  expect(browser.dispose()).toBe(disposal); expect(browser.current).toBeNull(); await Promise.resolve(); expect(settled).toBe(false);
+  const retained = source.images[0]!.handle as { close: ReturnType<typeof vi.fn> }; expect(retained.close).not.toHaveBeenCalled();
+  if (reject) gate.reject(new Error("opacity image fault")); else gate.resolve(asset);
+  if (reject) await expect(flight).rejects.toThrow(); else await expect(flight).resolves.toBeNull();
+  await disposal; expect(settled).toBe(true); expect(browser.current).toBeNull();
+  const pointers = await f.persistence.readPointers("browser-document");
+  const row = await f.persistence.readRevision("browser-document", pointers.draft!.revisionId);
+  const expected = structuredClone(source.revision.document);
+  if (!reject) Object.assign(expected.elements.find((element) => element.id === "shape-1")!, { opacity: 0 });
+  expect(row?.document).toEqual(expected); expect(row?.sequence).toBe(reject ? 2 : 3);
+  expect(f.writeAsset).toHaveBeenCalledTimes(1); expect(f.writeRevision).toHaveBeenCalledTimes(reject ? 2 : 3);
+  expect(new Set(f.handles).size).toBe(f.handles.length);
+  for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
+  await expect(browser.setShapeOpacity(input)).rejects.toThrow("UNAVAILABLE");
 });
