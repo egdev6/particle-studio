@@ -1,7 +1,7 @@
 import { createIndexedDbPersistenceAdapter } from "@particle-studio/persistence-indexeddb";
 import type { DurableDraftPublication } from "./durable-draft-workspace.js";
 import { browserPngDecodePrimitive, browserSha256 } from "./browser-png-platform.js";
-import { createEditorSession, type ShapePositionRequest } from "./editor-session.js";
+import { createEditorSession, type ShapeDimensionsRequest, type ShapePositionRequest } from "./editor-session.js";
 import { EMPTY_SCENE_JSON } from "./empty-scene.js";
 
 // One local editor slot; absence never creates a durable document.
@@ -140,6 +140,20 @@ export function createBrowserEditorSession() {
       return ownAction(() => session.setShapePosition(position));
     } catch { return Promise.reject(new Error("EDITOR_SHAPE_POSITION_INPUT_INVALID")); }
   };
+  const setShapeDimensions = (request: ShapeDimensionsRequest): Promise<BrowserCurrent | null> => {
+    if (disposed || !ready || importBusy || !currentView()) {
+      return Promise.reject(new Error("EDITOR_SHAPE_DIMENSIONS_UNAVAILABLE"));
+    }
+    try {
+      if (request === null || typeof request !== "object" || Array.isArray(request)) {
+        throw new Error("EDITOR_SHAPE_DIMENSIONS_INPUT_INVALID");
+      }
+      // Capture before entering the owned lane or invoking SDK callbacks.
+      const dimensions = Object.freeze({ documentId: request.documentId, revisionId: request.revisionId,
+        elementId: request.elementId, width: request.width, height: request.height });
+      return ownAction(() => session.setShapeDimensions(dimensions));
+    } catch { return Promise.reject(new Error("EDITOR_SHAPE_DIMENSIONS_INPUT_INVALID")); }
+  };
   const dispose = (): Promise<void> => {
     if (disposal) return disposal;
     disposed = true;
@@ -151,6 +165,6 @@ export function createBrowserEditorSession() {
     });
     return disposal;
   };
-  return Object.freeze({ start, createScene, importJson, importPng, addRectangle, setShapePosition, dispose,
+  return Object.freeze({ start, createScene, importJson, importPng, addRectangle, setShapePosition, setShapeDimensions, dispose,
     get current() { return currentView(); }, get disposed() { return disposed; } });
 }
