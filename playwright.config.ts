@@ -15,7 +15,7 @@ export default defineConfig({
     },
     {
       name: "chromium-preview",
-      testMatch: ["static-viewer.spec.ts", "durable-import.spec.ts", "png-import.spec.ts", "rectangle-create.spec.ts", "element-inspector.spec.ts", "set-shape-position.spec.ts", "set-shape-dimensions.spec.ts"],
+      testMatch: ["static-viewer.spec.ts", "durable-import.spec.ts", "png-import.spec.ts", "rectangle-create.spec.ts", "element-inspector.spec.ts", "set-shape-position.spec.ts", "set-shape-dimensions.spec.ts", "set-shape-opacity.spec.ts"],
       use: { browserName: "chromium", baseURL: "http://127.0.0.1:4176" },
     },
   ],

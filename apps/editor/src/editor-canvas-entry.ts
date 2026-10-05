@@ -6,6 +6,7 @@ import { mountEditorRectangleControls } from "./editor-rectangle-controls.js";
 import { mountEditorElementInspector } from "./editor-element-inspector.js";
 import { mountEditorPositionControls } from "./editor-position-controls.js";
 import { mountEditorDimensionControls } from "./editor-dimension-controls.js";
+import { mountEditorOpacityControls } from "./editor-opacity-controls.js";
 import { renderEditorFrame } from "./editor-frame.js";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#scene")!;
@@ -14,6 +15,7 @@ const pngStatus = document.querySelector<HTMLElement>("#png-status")!;
 const browser = createBrowserEditorSession();
 let positionControls: ReturnType<typeof mountEditorPositionControls> | undefined;
 let dimensionControls: ReturnType<typeof mountEditorDimensionControls> | undefined;
+let opacityControls: ReturnType<typeof mountEditorOpacityControls> | undefined;
 const inspector = mountEditorElementInspector({
   select: document.querySelector<HTMLSelectElement>("#scene-element")!,
   details: document.querySelector<HTMLElement>("#element-details")!,
@@ -21,6 +23,7 @@ const inspector = mountEditorElementInspector({
   onSelectionChange: () => {
     positionControls?.syncSelection();
     dimensionControls?.syncSelection();
+    opacityControls?.syncSelection();
   },
 });
 const currentMetadata = () => {
@@ -50,6 +53,7 @@ const activity: EditorImportActivity = {
     rectangleControls.setBusy(true);
     positionControls?.setBusy(true);
     dimensionControls?.setBusy(true);
+    opacityControls?.setBusy(true);
     inspector.setBusy(true);
     return true;
   },
@@ -70,6 +74,9 @@ const activity: EditorImportActivity = {
     dimensionControls?.setBusy(false);
     dimensionControls?.setReady(ready);
     dimensionControls?.syncSelection();
+    opacityControls?.setBusy(false);
+    opacityControls?.setReady(ready);
+    opacityControls?.syncSelection();
   },
 };
 const renderCurrent = () => {
@@ -159,14 +166,29 @@ dimensionControls = mountEditorDimensionControls({
     return message;
   },
 });
+opacityControls = mountEditorOpacityControls({
+  form: document.querySelector<HTMLFormElement>("#shape-opacity")!,
+  opacity: document.querySelector<HTMLInputElement>("#shape-opacity-value")!,
+  button: document.querySelector<HTMLButtonElement>("#apply-opacity")!,
+  status: document.querySelector<HTMLElement>("#opacity-status")!,
+  activity, getSelection: inspector.getSelection, getCurrent: currentMetadata,
+  setShapeOpacity: (request) => browser.setShapeOpacity(request),
+  onPublished: () => {
+    const message = renderCurrent();
+    status.textContent = message;
+    return message;
+  },
+});
 positionControls.syncSelection();
 dimensionControls.syncSelection();
+opacityControls.syncSelection();
 window.addEventListener("pagehide", () => {
   controls.dispose();
   pngControls.dispose();
   rectangleControls.dispose();
   positionControls?.dispose();
   dimensionControls?.dispose();
+  opacityControls?.dispose();
   inspector.dispose();
   void browser.dispose();
 }, { once: true });
@@ -190,6 +212,8 @@ async function renderStartup() {
     positionControls?.syncSelection();
     dimensionControls?.setReady(true);
     dimensionControls?.syncSelection();
+    opacityControls?.setReady(true);
+    opacityControls?.syncSelection();
   } catch (error) {
     if (browser.disposed) return;
     const message = error instanceof Error ? error.message : "Unable to restore scene.";
@@ -200,6 +224,8 @@ async function renderStartup() {
     document.querySelector<HTMLElement>("#position-status")!.textContent = `Position editing unavailable. ${message}`;
     dimensionControls?.setReady(false);
     document.querySelector<HTMLElement>("#dimension-status")!.textContent = `Dimension editing unavailable. ${message}`;
+    opacityControls?.setReady(false);
+    document.querySelector<HTMLElement>("#opacity-status")!.textContent = `Opacity editing unavailable. ${message}`;
   }
 }
 void renderStartup();
