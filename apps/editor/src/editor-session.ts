@@ -52,6 +52,14 @@ export interface ShapeDimensionsRequest {
   readonly height: number;
 }
 
+/** One selected published shape and its authored base opacity. */
+export interface ShapeOpacityRequest {
+  readonly documentId: string;
+  readonly revisionId: string;
+  readonly elementId: string;
+  readonly opacity: number;
+}
+
 export interface EditorSession {
   readonly workspace: DurableDraftWorkspace;
   readonly cache: PngImageCache;
@@ -61,6 +69,7 @@ export interface EditorSession {
   addRectangle(geometry: RectangleGeometry): Promise<void>;
   setShapePosition(request: ShapePositionRequest): Promise<void>;
   setShapeDimensions(request: ShapeDimensionsRequest): Promise<void>;
+  setShapeOpacity(request: ShapeOpacityRequest): Promise<void>;
 }
 
 /**
@@ -241,6 +250,49 @@ export function createEditorSession(deps: EditorSessionDependencies): EditorSess
         payload: { type: "set-shape-dimensions", elementId, width, height },
       });
       if (!result.ok) throw new Error(`EDITOR_SHAPE_DIMENSIONS_${result.error.code}`);
+    },
+    setShapeOpacity: async (request: ShapeOpacityRequest): Promise<void> => {
+      let selection: ShapeOpacityRequest;
+      try {
+        if (request === null || typeof request !== "object" || Array.isArray(request)) {
+          throw new Error();
+        }
+        selection = Object.freeze({ documentId: request.documentId, revisionId: request.revisionId,
+          elementId: request.elementId, opacity: request.opacity });
+      } catch { throw new Error("EDITOR_SHAPE_OPACITY_INPUT_INVALID"); }
+      const current = workspace.current;
+      if (!current || current.revision.documentId !== captured.documentId ||
+        !Number.isSafeInteger(current.revision.sequence) || current.revision.sequence < 0 ||
+        !Number.isSafeInteger(current.revision.sequence + 1)) {
+        throw new Error("EDITOR_SHAPE_OPACITY_SOURCE_UNAVAILABLE");
+      }
+      const { documentId, revisionId: selectedRevisionId, elementId, opacity } = selection;
+      if (typeof documentId !== "string" || !documentId ||
+        typeof selectedRevisionId !== "string" || !selectedRevisionId ||
+        typeof elementId !== "string" || !elementId) {
+        throw new Error("EDITOR_SHAPE_OPACITY_INPUT_INVALID");
+      }
+      if (documentId !== current.revision.documentId || selectedRevisionId !== current.revision.revisionId) {
+        throw new Error("EDITOR_SHAPE_OPACITY_SOURCE_MISMATCH");
+      }
+      const element = current.revision.document.elements.find((candidate) => candidate.id === elementId);
+      if (element?.type !== "shape" || typeof opacity !== "number" ||
+        !Number.isFinite(opacity) || opacity < 0 || opacity > 1) {
+        throw new Error("EDITOR_SHAPE_OPACITY_INPUT_INVALID");
+      }
+      // Bind the genuine source before metadata callbacks; queued publication
+      // retains expectedSource and the existing conditional-write authority.
+      const bridge = createEditorDurableEditing({ workspace,
+        revisionId: () => revisionId, createdAt: () => createdAt });
+      if (!bridge.ok) throw new Error("EDITOR_SHAPE_OPACITY_SOURCE_UNAVAILABLE");
+      const commandId = captured.commandId();
+      const revisionId = captured.revisionId();
+      const createdAt = captured.createdAt();
+      const result = await bridge.editing.dispatch({ commandSchemaVersion: 1,
+        commandId, documentId, expectedRevision: 0, actorCapability: "human-ui",
+        payload: { type: "set-shape-opacity", elementId, opacity },
+      });
+      if (!result.ok) throw new Error(`EDITOR_SHAPE_OPACITY_${result.error.code}`);
     },
     createAgent: (): EditorBrowserAgentWorkspaceResult => {
       const current = workspace.current;
