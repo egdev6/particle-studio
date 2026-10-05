@@ -45,7 +45,7 @@ all-stores rollback, cleanup or garbage collection is promised.
 **Add rectangle** needs a genuine current, with editable root scene coordinates
 x/y/width/height defaulting to 16/24/120/80 and fixed opacity 1. Positions must be
 finite and sizes positive/finite; empty inputs fail visibly. No JSON or File is
-needed after explicit creation. JSON, creation, PNG, rectangle and position share one owned
+needed after explicit creation. JSON, creation, PNG, rectangle, position and dimensions share one owned
 action lane and UI activity. Rectangle dispatch is human-UI `create-element` through
 a fresh durable bridge, command revision 0 and captured source.sequence+1, with
 `expectedSource` and fresh native CAS. It never reloads/retries/rebases automatically.
@@ -80,10 +80,34 @@ fields; stale selection or competing-tab publication never triggers a rebase.
 Equal coordinates publish an ordinary new revision/sequence/pointer and clear
 selection. Explicitly reselect after success; same-source rejection retains input.
 Named **Position status** reports committed-but-render-failed warnings truthfully,
-while inspection refreshes from actual current. All five actions share the lane.
-Position disposal precedes inspector disposal; existing owners await settlement.
+while inspection refreshes from actual current. All six actions share the lane.
+Both edit controllers dispose before inspection; existing owners await settlement.
 
-## Browser dimensions API proof (no production dimensions UI yet)
+## Edit selected shape dimensions and verify production UI
+
+Select a published shape, edit **Dimension width/height**, then **Apply dimensions**.
+Prefill includes genuine authored zero/negative sizes; both new values must be
+nonempty, finite and positive. Root/nested edits preserve stable IDs and all unrelated
+fields/assets/history. Equal pairs publish normally and clear selection; explicitly
+reselect after any new source. Same-source rejection retains typed input. Named
+**Dimension status** distinguishes rejection from committed rendering failure.
+
+Run `npx playwright test --project chromium-preview set-shape-dimensions.spec.ts`.
+The registered production spec uses the real built entry at `127.0.0.1:4176`, not
+an API fixture. Its 17 cases cover full native rows/history/pointers/assets, browser
+SHA/PNG, recursively key-sorted canonical JSON with array order preserved, independent
+root/nested pixel bounds, fractions/equal pairs and cold reload. Six real owned holds
+force other clicks/submits/selection/input changes; genuine readonly pointer-result
+barriers never override conditional readwrite CAS. UUID spies capture actual candidates
+for competing winners before/during preparation. Individual native bitmaps remain
+drawable or close once, including legitimate prehydration duplicates. Cross-position
+edits and both controllers' own result/render-warning statuses exercise shared END.
+Both pagehide outcomes freeze fields/status/DOM/pixels before settlement-aware cleanup.
+`element-inspector.spec.ts` adds dimension-disabled startup assertions, missing-asset
+and restored-render failure cases, retaining earlier startup checks and assertions.
+Coverage descriptions are not test-run receipts; run focused and full checks below.
+
+## Browser dimensions API proof (separate fixture)
 
 `set-shape-dimensions-api.spec.ts` runs in the `chromium` fixture project at
 `http://127.0.0.1:4175/apps/editor/tests/browser/fixtures/browser-dimensions-api.fixture.html`.
@@ -98,7 +122,7 @@ winners preserve authoritative CAS. Holds delay genuine readonly pointer results
 never conditional readwrite requests. Saved-pointer mutations require public reload.
 Per-handle drawable usefulness and close counts cover resolving/rejecting disposal;
 fixture rendering suppresses late DOM/frame/notifications and distinguishes committed
-publication from rendering failure. No production renderer hook or dimensions UI is added.
+publication from rendering failure. This API fixture adds no production renderer hooks.
 Local browser selection includes this spec; CI's develop/main branch filters remain
 unchanged and do not authorize child-branch routing changes.
 
@@ -108,7 +132,7 @@ unchanged and do not authorize child-branch routing changes.
 npm run test:browser
 npx vitest run --project core apps/editor/tests/browser-png-platform.test.ts apps/editor/tests/browser-editor-session.test.ts
 npm run validator:prepare
-npx vitest run --project ui apps/editor/tests/editor-element-inspector.test.tsx apps/editor/tests/editor-position-controls.test.tsx
+npx vitest run --project ui apps/editor/tests/editor-element-inspector.test.tsx apps/editor/tests/editor-position-controls.test.tsx apps/editor/tests/editor-dimension-controls.test.tsx
 npx tsc -p apps/editor/tsconfig.json --noEmit --pretty false
 ```
 
