@@ -78,6 +78,15 @@
         <button id="apply-dimensions" type="submit" disabled>Apply dimensions</button>
       </form>
       <p id="dimension-status" role="status" aria-label="Dimension status" aria-live="polite" aria-atomic="true">Loading local scene…</p>
+      <form id="shape-opacity" aria-label="Shape opacity controls" aria-busy="false" novalidate>
+        <fieldset>
+          <legend>Selected shape authored opacity; animation tracks may override it</legend>
+          <label for="shape-opacity-value">Shape opacity</label>
+          <input id="shape-opacity-value" type="number" step="any" min="0" max="1" disabled />
+        </fieldset>
+        <button id="apply-opacity" type="submit" disabled>Apply opacity</button>
+      </form>
+      <p id="opacity-status" role="status" aria-label="Opacity status" aria-live="polite" aria-atomic="true">Loading local scene…</p>
     </section>
     <p id="status" role="status">Loading local scene…</p>
     <canvas id="scene" width="256" height="160" aria-label="Current scene"></canvas>
