@@ -19,11 +19,11 @@ The production entry is a vanilla durable JSON editor with PNG insertion. `brows
 composes the actual IndexedDB adapter, browser SHA-256/PNG primitives and editor
 session for the fixed local database `particle-studio-browser-viewer` and document
 `browser-document`. Dependencies are captured at construction without I/O;
-startup owns a bounded flight; JSON, creation, PNG, rectangle and position actions share one owned flight. Empty and valid saved-only slots show an
+startup owns a bounded flight; JSON, creation, PNG, rectangle, position and dimensions share one owned flight. Empty and valid saved-only slots show an
 explicitly **unpersisted sample**, without creating a draft. Existing drafts reload
 verified canonical content and PNGs, then render at their own playback start.
 Startup failures block import: no reset, deletion, seed or fallback success.
-Accessible independent JSON/PNG/rectangle/position controls capture input once; all disable during shared work.
+Accessible independent JSON/PNG/rectangle/position/dimension controls capture input once; all disable during shared work.
 User imports publish through the existing workflow, hydrate locally stored PNG
 references and render the current publication at its playback start. A startup-known
 sequence floor permits saved-only imports while retaining saved rows; only JSON
@@ -65,7 +65,7 @@ JSON retains its startup floor. Rectangle creation writes no asset bytes, but
 canonical prehydration still rereads/redecodes referenced PNGs: duplicate handles
 close once while retained handles stay renderable through publication replacement.
 Named rectangle status preserves the unique unnamed primary canvas status.
-All five actions share the facade's authoritative lane and UI activity. Preparation,
+All six actions share the facade's authoritative lane and UI activity. Preparation,
 image hydration and stale-source failures preserve the prior publication/frame and
 appropriate durable rows; there is no automatic retry/rebase or native-draw rollback.
 Schema initialization is allowed; startup never writes durable content records.
@@ -89,7 +89,7 @@ reused; same-source refresh or rejected work retains a still-valid selection.
 Reload restores the durable scene/pixels but clears selection. Healthy ready startup
 and a genuine current are required; empty/saved-only users must Create blank scene
 or import JSON. Pending, failed startup, unavailable context and disposal disable it.
-All five actions disable selection in their shared lane; named inspector
+All six actions disable selection in their shared lane; named inspector
 feedback identifies retained detail's previous publication while pending. Settlement
 refreshes actual current even after publication succeeded but rendering failed.
 The inspector borrows metadata only: its frozen `getSelection()` token contains
@@ -131,6 +131,86 @@ the existing browser owner waits for work before releasing image resources.
 `browser/set-shape-position.spec.ts` covers production root/nested pixels, canonical
 history/reload, real PNG handle ownership, five-action exclusion, native CAS
 winners and resolving/rejecting pagehide. Startup gates remain in the inspector spec.
+
+## Shape dimensions SDK (issue #116, chain PR1)
+
+`EditorSession.setShapeDimensions({documentId, revisionId, elementId, width, height})`
+is the source-bound durable SDK action introduced in PR1, mirrored by the browser
+facade in PR2 before production wiring. It captures all five scalars once before callbacks/awaits;
+a genuine live matching publication, root/nested shape and sequence room are required.
+Both new dimensions must be finite positive numbers (fractions are valid), checked
+before IDs/time or asset/persistence I/O. Existing schema-valid zero/negative source
+sizes remain importable. A fresh human-UI bridge dispatches `set-shape-dimensions`
+at command revision 0 without element-ID allocation, preserving stable ID and every
+field except width/height. Selected expectedSource and existing CAS prevent rebasing;
+equal pairs still publish a new durable revision, sequence and pointer. Bounded
+`EDITOR_SHAPE_DIMENSIONS_*` failures preserve current/history and any durable winner.
+PNG prehydration retains useful handles and closes duplicates once; the existing
+owner awaits settlement before cleanup. Core session tests use the real workspace
+and IndexedDB adapter with fake-indexeddb, not native Chromium dimension proof.
+
+## Browser dimensions API (issue #116, chain PR2)
+
+`createBrowserEditorSession().setShapeDimensions(request)` mirrors the SDK request.
+It rejects disposed/not-ready/busy/no-current state before reading caller getters,
+then reads and freezes exactly five scalars before entering the owned lane or SDK
+callbacks. Throwing getters/malformed requests reject with bounded input errors.
+JSON, blank, PNG, rectangle, position and dimensions now share six-action exclusion,
+including direct API calls. SDK source/type/pair/sequence guards remain authoritative;
+there is no retry, rebase or element-ID allocation. Schema-valid zero/negative
+source sizes remain importable; both requested sizes must be finite and positive.
+Success returns actual current as borrowed rendering data, never release authority.
+Rendering belongs to the caller: a postcommit render failure cannot undo publication.
+Disposal returns null current immediately, awaits resolving/rejecting owned work,
+then releases publication/cache once; callers must suppress late frame/DOM updates.
+The native API fixture proves dimensions independently of the production controller;
+the built-entry controls have their own production-preview proof below.
+
+## Standalone dimensions controls (issue #116, chain PR3)
+
+`mountEditorDimensionControls` accepts caller-supplied form, width/height inputs,
+button, named **Dimension status**, shared activity, `getSelection`/`getCurrent`,
+`setShapeDimensions` and `onPublished`. It creates no production markup or renderer.
+Only matching published shape metadata enables editing; root/nested values are
+original authored dimensions, including schema-valid zero/negative initial sizes.
+Both new values must be nonempty, finite and positive; fractions and equal pairs
+are valid. Each raw input and the frozen five-scalar intent are captured before
+activity callbacks. Ready/own/shared busy gates honor six-action exclusion.
+New document/revision identity clears selection through the inspector and requires
+explicit reselection; same-source rejection preserves typed values and selection.
+Own success or committed-but-render-failed feedback survives shared settlement;
+external changed-source settlement refreshes guidance from actual current.
+Dispose controls before the inspector: listener removal and late-output suppression
+are idempotent, without cancellation or resource release. The browser remains owner.
+`editor-dimension-controls.test.tsx` supplies standalone DOM contract proof;
+PR4 mounts this existing controller in the production entry as described below.
+
+## Edit selected shape dimensions (issue #116, chain PR4)
+
+Choose a published shape, edit **Dimension width** and **Dimension height**, then
+**Apply dimensions**. Prefill is genuine authored/local metadata, including initial
+schema-valid zero/negative sizes, not animated geometry, DOM option text or unsent
+JSON. Both requested values must be trimmed-nonempty, finite and strictly positive;
+fractions and equal pairs are valid. Groups and all other variants remain read-only.
+The controller captures the frozen document/revision/element token and both values
+before shared activity; SDK guards and native CAS retain source authority.
+Root/nested shapes keep stable IDs and every field except width/height, including
+coordinates, opacity, transforms, hierarchy/order, tracks, scene configuration and
+PNG references. Assets and saved history remain intact; equal pairs still advance
+the durable revision/sequence/pointer. Any new source requires explicit reselection;
+same-source rejection keeps selection and typed input, with no silent retarget/retry.
+All six actions exclude forced submits/clicks/selection changes during owned work.
+Both controllers preserve their own success, rejection and committed-render warning
+across shared settlement; external publication refreshes guidance from actual current.
+Named **Dimension status** leaves the sole unnamed primary canvas status distinct.
+Startup sample/saved-only/pending/failure states cannot enable dimensions or seed a
+draft. Pagehide disposes both edit controllers before inspector null notification;
+late DOM/frame updates stop while the existing owner awaits work and releases PNGs.
+`browser/set-shape-dimensions.spec.ts` supplies 17 production-preview cases for full
+native history, independent canonical bytes/pixels/SHA, six holds, competing winners,
+cross-position edits, truthful render warnings and both pagehide settlements.
+The inspector spec extends disabled startup assertions and adds missing-asset and
+restored-render failure cases. These are test coverage, not an execution receipt.
 
 Run `npm run validator:prepare` before
 `npx vitest run --project core apps/editor/tests/editor-frame.test.ts`.
