@@ -19,7 +19,8 @@ The production entry is a vanilla durable JSON editor with PNG insertion. `brows
 composes the actual IndexedDB adapter, browser SHA-256/PNG primitives and editor
 session for the fixed local database `particle-studio-browser-viewer` and document
 `browser-document`. Dependencies are captured at construction without I/O;
-startup owns a bounded flight; JSON, creation, PNG, rectangle, position and dimensions share one owned flight. Empty and valid saved-only slots show an
+startup owns a bounded flight; JSON, creation, PNG, rectangle, position, dimensions
+and the opacity API share one owned flight. Empty and valid saved-only slots show an
 explicitly **unpersisted sample**, without creating a draft. Existing drafts reload
 verified canonical content and PNGs, then render at their own playback start.
 Startup failures block import: no reset, deletion, seed or fallback success.
@@ -65,7 +66,8 @@ JSON retains its startup floor. Rectangle creation writes no asset bytes, but
 canonical prehydration still rereads/redecodes referenced PNGs: duplicate handles
 close once while retained handles stay renderable through publication replacement.
 Named rectangle status preserves the unique unnamed primary canvas status.
-All six actions share the facade's authoritative lane and UI activity. Preparation,
+The six production actions share UI activity; the facade also excludes the opacity
+API through its authoritative owned lane. Preparation,
 image hydration and stale-source failures preserve the prior publication/frame and
 appropriate durable rows; there is no automatic retry/rebase or native-draw rollback.
 Schema initialization is allowed; startup never writes durable content records.
@@ -229,8 +231,32 @@ Equal values still create a new durable revision/sequence/pointer, preserving al
 unrelated fields, saved history and PNG asset metadata/bytes. PNG prehydration keeps
 useful retained handles and closes duplicates once; release/cache ownership is unchanged.
 Bounded `EDITOR_SHAPE_OPACITY_*` failures preserve the appropriate prior or durable winner.
-This is non-UI SDK coverage with the real workspace and fake-indexeddb adapter;
-browser facade/native opacity proof, standalone controls and production UI remain future units.
+SDK coverage uses the real workspace and fake-indexeddb adapter; the browser facade
+and native API coverage follow below. Standalone controls and production UI remain future units.
+
+## Browser opacity API (issue #122, chain PR3)
+
+`createBrowserEditorSession().setShapeOpacity(request)` mirrors the readonly SDK
+request. Disposed/not-ready/busy/no-current guards reject before caller getters;
+null, nonobject, array or throwing-getter requests fail with bounded input errors.
+Exactly four scalars are read once and frozen before the owned SDK callback.
+JSON, blank, PNG, rectangle, position, dimensions and opacity exclude each other
+through the actual shared flight, including direct calls and SDK callback reentry.
+SDK source/shape/range/sequence checks and fresh human-UI expectedSource/CAS remain
+unchanged: no retarget, retry, rebase or element-ID allocation.
+New requests accept finite [0, 1], including 0/-0, fractions and 1. Existing authored
+values such as -0.25/2 remain importable without migration or clamping. Equal values
+publish an ordinary revision/sequence/pointer. Only authored opacity changes;
+preserved tracks can override it, so success need not change every evaluated pixel.
+Saved history and referenced PNG assets remain intact, even at shape opacity zero.
+Returned actual current is borrowed: no release/cache authority, renderer or DOM.
+The existing owner awaits resolving/rejecting work before cleanup; callers suppress
+late frame/status updates. A committed external render failure cannot undo publication.
+`browser-editor-session.test.ts` covers capture, seven-origin guards and settlement;
+`browser/set-shape-opacity-api.spec.ts` covers native rows, independent canonical
+bytes/SHA, root/nested alpha, PNG usefulness, tracks, reload, genuine CAS winners
+and per-bitmap cleanup. These are coverage descriptions, not execution receipts.
+Opacity controls and production wiring remain issue #122 units PR4/PR5.
 
 Run `npm run validator:prepare` before
 `npx vitest run --project core apps/editor/tests/editor-frame.test.ts`.

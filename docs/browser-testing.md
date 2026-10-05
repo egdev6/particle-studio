@@ -126,6 +126,34 @@ publication from rendering failure. This API fixture adds no production renderer
 Local browser selection includes this spec; CI's develop/main branch filters remain
 unchanged and do not authorize child-branch routing changes.
 
+## Browser opacity API proof (issue #122, chain PR3)
+
+`set-shape-opacity-api.spec.ts` is registered in the existing `chromium` playground
+at `http://127.0.0.1:4175/apps/editor/tests/browser/fixtures/browser-opacity-api.fixture.html`.
+Run `npx playwright test --project=chromium set-shape-opacity-api.spec.ts` for focused
+coverage; the configured servers and branch routing are unchanged. The separate
+HTML/TS harness uses the real facade/session, native IndexedDB, SHA/PNG and canvas,
+not production opacity controls (those remain PR4/PR5).
+Healthy JSON/PNG publication, sequence/current metadata and useful pixels precede
+the API assertion. Root/nested untracked black shapes check authored 0/fraction/1
+alpha and equal publication; separately tracked scenes check evaluated override
+truth while preserving authored edits and schema-valid initial -0.25/2 values.
+Independent recursive key-sorted canonical JSON retains array order. Comparisons
+cover full native revision documents/bytes/identifier/length, all history/pointers,
+saved revisions and asset metadata/bytes with independent SHA. Zero shape opacity
+retains useful PNG pixels/handles. Out-of-band saved-pointer setup explicitly uses
+public reload before prior-source comparisons; cold public reload checks persistence.
+Seven genuine origin holds exclude all seven direct owned calls through I/O settlement.
+Barriers delay only readonly pointer results, leaving conditional readwrite CAS
+intact. Before/during-preparation competing durable winners survive; actual eager
+candidate UUIDs are observed, stale candidate rows stay absent, with no retry,
+retarget, rebase or implicit reload. External `renderEditorFrame` failure after commit
+reports the durable winner truthfully; rerender uses the same actual current without
+rollback. Resolving and rejecting disposal await held work, suppress late frame/DOM/
+notifications and close each owned bitmap identity once, including prior duplicates.
+The facade grants borrowed current no release/cache authority and owns no renderer.
+These descriptions specify coverage, not a passing-run or native approval receipt.
+
 ## Verify browser behavior
 
 ```sh
