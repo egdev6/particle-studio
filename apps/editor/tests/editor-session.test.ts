@@ -38,6 +38,8 @@ const cleanups: (() => Promise<void>)[] = [];
 function fixture(jsonImportSequenceFloor?: () => number) {
   const databaseName = `editor-session-${Date.now()}-${Math.random()}`;
   const persistence = createIndexedDbPersistenceAdapter({ databaseName });
+  const realReadPointers = persistence.readPointers.bind(persistence);
+  const realWriteRevision = persistence.writeCompleteRevisionIfPointersMatch.bind(persistence);
   const readPointers = vi.spyOn(persistence, "readPointers");
   const readRevision = vi.spyOn(persistence, "readRevision");
   const writeRevision = vi.spyOn(persistence, "writeCompleteRevisionIfPointersMatch");
@@ -82,6 +84,7 @@ function fixture(jsonImportSequenceFloor?: () => number) {
   return {
     session, persistence, deps, reads, handles, decodePng, start, importJson,
     readPointers, readRevision, writeRevision, readAsset, writeAsset,
+    realReadPointers, realWriteRevision,
   };
 }
 
@@ -497,19 +500,20 @@ it.each(["preparation", "conditional-conflict"])("dimensions preserves truthful 
   const winner = createCompleteRevision({ documentId: "document-1", revisionId: "external-winner", sequence: 2, document: documentAt(0.8) });
   if (fault === "preparation") f.readPointers.mockRejectedValueOnce(new Error("prepare failed"));
   else {
-    const realWrite = f.writeRevision.getMockImplementation()!;
     f.writeRevision.mockImplementationOnce(async (...args) => {
       await f.persistence.writeCompleteRevision(winner, { saved: null,
         draft: { kind: "draft", documentId: "document-1", revisionId: winner.revisionId, sequence: 2 } });
-      return realWrite(...args);
+      return f.realWriteRevision(...args);
     });
   }
+  f.writeRevision.mockClear();
   await expect(f.session.setShapeDimensions(selectedDimensions(f))).rejects.toThrow(/EDITOR_SHAPE_DIMENSIONS_/);
   expect(f.session.workspace.current).toBe(source);
   expect(await f.persistence.readRevision("document-1", "revision-2")).toBeNull();
   expect(await f.persistence.readRevision("document-1", source.revision.revisionId)).toEqual(source.revision);
   if (fault === "preparation") expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
   else {
+    expect(f.writeRevision).toHaveBeenCalledTimes(1);
     expect(await f.persistence.readRevision("document-1", winner.revisionId)).toEqual(winner);
     expect((await f.persistence.readPointers("document-1")).draft?.revisionId).toBe(winner.revisionId);
     await f.session.reload();
@@ -927,4 +931,297 @@ it("rectangle preserves a rich PNG current, bitmap leases and saved history; lat
   f.session.workspace.current!.release(); f.session.cache.clear();
   expect(new Set(f.handles).size).toBe(f.handles.length);
   for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
+});
+
+type OpacityRequest = { readonly documentId: string; readonly revisionId: string; readonly elementId: string; readonly opacity: number };
+function selectedOpacity(f: ReturnType<typeof fixture>, opacity = 0.25): OpacityRequest {
+  const source = f.session.workspace.current!.revision;
+  return { documentId: source.documentId, revisionId: source.revisionId, elementId: "shape-1", opacity };
+}
+
+it.each(["root", "nested"])("opacity publishes exact %s content, boundaries and equal values with captured human intent", async (placement) => {
+  const f = fixture(); const document = documentAt(0.4);
+  document.seed = 99; document.loop = false; document.playbackRange.startUs = 500_000;
+  Object.assign(document.elements[0]!, { width: 31, height: 47, opacity: -0.25,
+    transform: [1, 0.5, 0, 2, 10, -20], visible: false });
+  if (placement === "nested") {
+    document.rootIds = ["group"];
+    document.elements.push({ id: "group", type: "group", childrenIds: ["shape-1"], transform: [1, 0, 0, 1, 30, 40] });
+  }
+  await f.importJson(document); const first = f.session.workspace.current!;
+  expect(first.revision.document).toEqual(document);
+  expect(typeof f.session.setShapeOpacity).toBe("function");
+  const real = durableEditing.createEditorDurableEditing;
+  const dispatch = vi.fn(); const publish = vi.fn();
+  const bridge = vi.spyOn(durableEditing, "createEditorDurableEditing").mockImplementation((options) => {
+    const result = real({ ...options, workspace: { get current() { return options.workspace.current; },
+      publish: (request) => { publish(request); return options.workspace.publish(request); },
+      reload: options.workspace.reload.bind(options.workspace) } });
+    if (!result.ok) return result;
+    return { ok: true, editing: { snapshot: result.editing.snapshot.bind(result.editing),
+      undo: result.editing.undo.bind(result.editing), redo: result.editing.redo.bind(result.editing),
+      dispatch: (command) => { dispatch(command); return result.editing.dispatch(command); } } };
+  });
+  for (const opacity of [0, -0, 1, 0.375, 0.375]) {
+    const source = f.session.workspace.current!; const input = { ...selectedOpacity(f, opacity) };
+    const reads: string[] = []; const captured = { ...input };
+    for (const key of Object.keys(input) as (keyof OpacityRequest)[]) {
+      Object.defineProperty(captured, key, { get() { reads.push(key); return input[key]; } });
+    }
+    clearPositionEffects(f); dispatch.mockClear(); publish.mockClear();
+    f.deps.commandId.mockImplementation(() => {
+      expect(reads).toEqual(["documentId", "revisionId", "elementId", "opacity"]);
+      expect(bridge.mock.calls.at(-1)![0].workspace.current).toBe(source);
+      Object.assign(input, { documentId: "foreign", revisionId: "retargeted", elementId: "group", opacity: 0.9 });
+      return "opacity-command";
+    });
+    const flight = f.session.setShapeOpacity(captured);
+    input.opacity = 0.8; await expect(flight).resolves.toBeUndefined();
+    const expected = structuredClone(source.revision.document);
+    Object.assign(expected.elements[0]!, { opacity: opacity === 0 ? 0 : opacity }); // Durable JSON normalizes -0.
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith({ commandSchemaVersion: 1, commandId: "opacity-command",
+      documentId: "document-1", expectedRevision: 0, actorCapability: "human-ui",
+      payload: { type: "set-shape-opacity", elementId: "shape-1", opacity } });
+    const publication = publish.mock.calls[0]![0];
+    expect(publication).toMatchObject({ sequence: source.revision.sequence + 1,
+      expectedSource: { documentId: "document-1", revisionId: source.revision.revisionId } });
+    expect(publication.revisionId()).toBe(`revision-${source.revision.sequence + 1}`);
+    expect(publication.createdAt()).toBe(1234);
+    await expectDurable(f, `revision-${source.revision.sequence + 1}`, source.revision.sequence + 1, expected);
+    expect(await f.persistence.readRevision("document-1", source.revision.revisionId)).toEqual(source.revision);
+    expect(reads).toEqual(["documentId", "revisionId", "elementId", "opacity"]);
+    expect(f.deps.elementIdSource).not.toHaveBeenCalled(); expect(f.writeRevision).toHaveBeenCalledTimes(1);
+    for (const spy of [f.deps.commandId, f.deps.revisionId, f.deps.createdAt]) expect(spy).toHaveBeenCalledTimes(1);
+  }
+  expect(bridge).toHaveBeenCalledTimes(5);
+  expect(await f.persistence.readRevision("document-1", first.revision.revisionId)).toEqual(first.revision);
+});
+
+const invalidOpacity = [-0.01, 1.01, NaN, Infinity, -Infinity, "0.5", null, undefined, true, false] as const;
+it.each([
+  ...invalidOpacity.map((opacity) => ["opacity", { opacity }] as const),
+  ["empty document", { documentId: "" }], ["foreign document", { documentId: "foreign" }],
+  ["nonstring document", { documentId: 3 }], ["empty revision", { revisionId: "" }],
+  ["stale revision", { revisionId: "old" }], ["nonstring revision", { revisionId: null }],
+  ["empty target", { elementId: "" }], ["missing target", { elementId: "unknown" }],
+  ["nonstring target", { elementId: 3 }],
+] as const)("opacity rejects %s before every effect (%j)", async (_name, invalid) => {
+  const f = fixture(); await f.importJson(); const current = f.session.workspace.current!;
+  const pointers = await f.persistence.readPointers("document-1"); clearPositionEffects(f);
+  for (const spy of [f.deps.commandId, f.deps.revisionId, f.deps.createdAt]) {
+    spy.mockImplementation(() => { throw new Error("metadata must not run"); });
+  }
+  expect(typeof f.session.setShapeOpacity).toBe("function");
+  await expect(f.session.setShapeOpacity({ ...selectedOpacity(f), ...invalid } as OpacityRequest))
+    .rejects.toThrow(/EDITOR_SHAPE_OPACITY_/);
+  expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+  expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+  expect(await f.persistence.readRevision("document-1", current.revision.revisionId)).toEqual(current.revision);
+});
+
+it.each([null, undefined, {}, [], "request", 3, true, () => undefined])(
+  "opacity rejects malformed request %j with bounded input failure", async (input) => {
+    const f = fixture(); await f.importJson(); const current = f.session.workspace.current!;
+    const pointers = await f.persistence.readPointers("document-1"); clearPositionEffects(f);
+    expect(typeof f.session.setShapeOpacity).toBe("function");
+    await expect(f.session.setShapeOpacity(input as OpacityRequest)).rejects.toThrow("EDITOR_SHAPE_OPACITY_INPUT_INVALID");
+    expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+    expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+  },
+);
+
+it.each(["documentId", "revisionId", "elementId", "opacity"] as const)("opacity bounds a throwing %s getter before metadata", async (field) => {
+  const f = fixture(); await f.importJson(); const current = f.session.workspace.current!;
+  const input = selectedOpacity(f); Object.defineProperty(input, field, { get() { throw new Error("caller getter"); } });
+  clearPositionEffects(f); expect(typeof f.session.setShapeOpacity).toBe("function");
+  await expect(f.session.setShapeOpacity(input)).rejects.toThrow("EDITOR_SHAPE_OPACITY_INPUT_INVALID");
+  expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+});
+
+it.each(["missing", "foreign", "overflow", "released"])("opacity rejects %s current without adopting or modifying it", async (kind) => {
+  const f = fixture();
+  if (kind !== "missing") await f.session.workspace.publish({ documentId: kind === "foreign" ? "foreign" : "document-1",
+    editableJson: JSON.stringify(documentAt(0.4)), revisionId: () => "source",
+    sequence: kind === "overflow" ? Number.MAX_SAFE_INTEGER : 1, createdAt: () => 1234 });
+  if (kind === "released") f.session.workspace.current!.release();
+  const current = f.session.workspace.current; clearPositionEffects(f);
+  expect(typeof f.session.setShapeOpacity).toBe("function");
+  await expect(f.session.setShapeOpacity({ documentId: "document-1", revisionId: "source", elementId: "shape-1", opacity: 0 }))
+    .rejects.toThrow("EDITOR_SHAPE_OPACITY_SOURCE_UNAVAILABLE");
+  expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+});
+
+it.each(["group", "line", "text", "particle", "image"] as const)("opacity rejects genuine %s targets before effects", async (type) => {
+  const f = fixture(); await f.importJson();
+  if (type === "image") await f.session.importWorkflow({ kind: "image-import", file: new File([bytes], "image.png", { type: "image/png" }) });
+  else {
+    const document = documentAt(0.4);
+    const element = type === "group" ? { id: "nonshape", type, childrenIds: [] }
+      : type === "line" ? { id: "nonshape", type, x1: 0, y1: 0, x2: 1, y2: 1, opacity: 1 }
+      : type === "text" ? { id: "nonshape", type, x: 0, y: 0, text: "authored", fontSize: 12, opacity: 1 }
+      : { id: "nonshape", type, count: 1, x: 0, y: 0, velocityX: 1, velocityY: 1, spread: 1, size: 1, opacity: 1, lifetimeSteps: 1 };
+    document.elements.push(element); document.rootIds.push("nonshape"); await f.importJson(document);
+  }
+  const current = f.session.workspace.current!; const pointers = await f.persistence.readPointers("document-1");
+  clearPositionEffects(f); expect(typeof f.session.setShapeOpacity).toBe("function");
+  await expect(f.session.setShapeOpacity({ ...selectedOpacity(f), elementId: type === "image" ? "image-1" : "nonshape" }))
+    .rejects.toThrow("EDITOR_SHAPE_OPACITY_INPUT_INVALID");
+  expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+  expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+  expect(await f.persistence.readRevision("document-1", current.revision.revisionId)).toEqual(current.revision);
+});
+
+it("opacity accepts a sequence-zero wide source but refuses reused IDs and queued source advancement", async () => {
+  const f = fixture(); const document = documentAt(0.4); Object.assign(document.elements[0]!, { opacity: 2 });
+  await f.session.workspace.publish({ documentId: "document-1", editableJson: JSON.stringify(document),
+    revisionId: () => "zero", sequence: 0, createdAt: () => 1234 });
+  expect(typeof f.session.setShapeOpacity).toBe("function");
+  await f.session.setShapeOpacity(selectedOpacity(f, 1));
+  const expected = structuredClone(document); Object.assign(expected.elements[0]!, { opacity: 1 });
+  await expectDurable(f, "revision-1", 1, expected);
+  const stale = selectedOpacity(f); await f.importJson(documentAt(0.8)); clearPositionEffects(f);
+  await expect(f.session.setShapeOpacity(stale)).rejects.toThrow("EDITOR_SHAPE_OPACITY_SOURCE_MISMATCH");
+  expectNoPositionEffects(f);
+  const selected = { ...selectedOpacity(f) }; const replacement = f.importJson(documentAt(0.6));
+  const candidateIndex = f.deps.revisionId.mock.results.length;
+  const flight = f.session.setShapeOpacity(selected); const candidate = f.deps.revisionId.mock.results[candidateIndex]!;
+  expect(candidate.type).toBe("return");
+  Object.assign(selected, { documentId: "foreign", revisionId: "retargeted", elementId: "missing", opacity: 1 });
+  await replacement; const winner = f.session.workspace.current!;
+  await expect(flight).rejects.toThrow(/EDITOR_SHAPE_OPACITY_/);
+  expect(f.session.workspace.current).toBe(winner); expect(candidate.value).not.toBe(winner.revision.revisionId);
+  expect(await f.persistence.readRevision("document-1", candidate.value)).toBeNull();
+  await expectDurable(f, winner.revision.revisionId, 3, documentAt(0.6));
+});
+
+it.each(["preparation", "write", "invalid-publication", "competitor-before", "competitor-during"])(
+  "opacity preserves prior or native CAS winner on %s without retry", async (fault) => {
+    const f = fixture(); await f.importJson(); const source = f.session.workspace.current!;
+    const pointers = await f.persistence.readPointers("document-1");
+    const winner = createCompleteRevision({ documentId: "document-1", revisionId: "external-winner", sequence: 2, document: documentAt(0.8) });
+    const winnerPointers = { saved: null, draft: { kind: "draft" as const, documentId: "document-1", revisionId: winner.revisionId, sequence: 2 } };
+    if (fault === "competitor-before") await f.persistence.writeCompleteRevision(winner, winnerPointers);
+    if (fault === "preparation") f.readPointers.mockRejectedValueOnce(new Error("prepare failed"));
+    if (fault === "write") f.writeRevision.mockRejectedValueOnce(new Error("write failed"));
+    if (fault === "invalid-publication") f.deps.createdAt.mockReturnValue(-1);
+    if (fault === "competitor-during") {
+      f.readPointers.mockImplementationOnce(async (...args) => {
+        const held = await f.realReadPointers(...args);
+        await f.persistence.writeCompleteRevision(winner, winnerPointers);
+        return held;
+      });
+    }
+    f.writeRevision.mockClear(); expect(typeof f.session.setShapeOpacity).toBe("function");
+    await expect(f.session.setShapeOpacity(selectedOpacity(f))).rejects.toThrow(/EDITOR_SHAPE_OPACITY_/);
+    expect(f.session.workspace.current).toBe(source);
+    expect(await f.persistence.readRevision("document-1", "revision-2")).toBeNull();
+    expect(await f.persistence.readRevision("document-1", source.revision.revisionId)).toEqual(source.revision);
+    expect(f.deps.revisionId).toHaveBeenCalledTimes(2);
+    expect(f.writeRevision.mock.calls.length).toBeLessThanOrEqual(1);
+    if (fault === "competitor-during") expect(f.writeRevision).toHaveBeenCalledTimes(1);
+    if (fault.startsWith("competitor")) {
+      expect(await f.persistence.readPointers("document-1")).toEqual(winnerPointers);
+      expect(await f.persistence.readRevision("document-1", winner.revisionId)).toEqual(winner);
+      expect((await f.session.reload()).revision).toEqual(winner);
+    } else expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+    f.deps.createdAt.mockReturnValue(1234); await f.session.setShapeOpacity(selectedOpacity(f));
+    expect(f.session.workspace.current?.revision.sequence).toBe(fault.startsWith("competitor") ? 3 : 2);
+  },
+);
+
+it("opacity retains saved PNG history and each useful cache handle at zero and equal, through hydration failure and imports", async () => {
+  const floor = vi.fn(() => 41); const f = fixture(floor); await f.importJson();
+  await f.session.importWorkflow({ kind: "image-import", file: new File([bytes], "image.png", { type: "image/png" }) });
+  const original = f.session.workspace.current!; const saved = createSavedRevisionPointer(original.revision);
+  const retained = original.workspace.images[0]!.handle;
+  await f.persistence.writeCompleteRevision(original.revision, { saved, draft: (await f.persistence.readPointers("document-1")).draft });
+  const source = await f.session.reload(); expect(source.workspace.images[0]!.handle).toBe(retained);
+  const asset = await f.persistence.readAsset(await sha256(bytes));
+  const expected = structuredClone(source.revision.document); Object.assign(expected.elements[0]!, { opacity: 0 });
+  expect(typeof f.session.setShapeOpacity).toBe("function");
+  for (const sequence of [44, 45]) {
+    clearPositionEffects(f); await f.session.setShapeOpacity(selectedOpacity(f, 0));
+    const current = f.session.workspace.current!;
+    expect(current.revision).toMatchObject({ sequence, document: expected });
+    expect(current.workspace.plan.canonicalEditableJson).toBe(new TextDecoder().decode(canonicalizeSceneDocument.exportEditableJson(expected)));
+    expect(await f.persistence.readRevision("document-1", current.revision.revisionId)).toEqual(current.revision);
+    expect(await f.persistence.readPointers("document-1")).toEqual({ saved,
+      draft: { kind: "draft", documentId: "document-1", revisionId: current.revision.revisionId, sequence } });
+    expect(current.workspace.images[0]!.handle).toBe(retained);
+    expect(f.session.cache.resolveImage(current.workspace.images[0]!)?.handle).toBe(retained);
+    expect(f.readAsset).toHaveBeenCalled(); expect(f.decodePng).toHaveBeenCalled(); expect(f.writeAsset).not.toHaveBeenCalled();
+    for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(handle === retained ? 0 : 1);
+  }
+  const current = f.session.workspace.current!; const pointers = await f.persistence.readPointers("document-1");
+  f.readAsset.mockRejectedValueOnce(new Error("prehydration fault")); f.writeRevision.mockClear();
+  await expect(f.session.setShapeOpacity(selectedOpacity(f, 0.5))).rejects.toThrow(/EDITOR_SHAPE_OPACITY_/);
+  expect(f.writeRevision).not.toHaveBeenCalled(); expect(f.session.workspace.current).toBe(current);
+  expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+  expect(await f.persistence.readRevision("document-1", "revision-5")).toBeNull();
+  expect(await f.persistence.readRevision("document-1", source.revision.revisionId)).toEqual(source.revision);
+  expect(await f.persistence.readAsset(await sha256(bytes))).toEqual(asset);
+  expect(f.session.cache.resolveImage(current.workspace.images[0]!)?.handle).toBe(retained);
+  for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(handle === retained ? 0 : 1);
+  expect(floor).toHaveBeenCalledTimes(1);
+  await f.importJson(documentAt(0.6)); expect(f.session.workspace.current?.revision.sequence).toBe(46);
+  f.deps.elementIdSource.mockReturnValue({ kind: "id", id: "later-image" });
+  await f.session.importWorkflow({ kind: "image-import", file: new File([bytes], "later.png", { type: "image/png" }) });
+  expect(f.session.workspace.current?.revision.sequence).toBe(47); expect(floor).toHaveBeenCalledTimes(2);
+  expect((await f.persistence.readPointers("document-1")).saved).toEqual(saved);
+  expect(await f.persistence.readRevision("document-1", source.revision.revisionId)).toEqual(source.revision);
+  expect(await f.persistence.readAsset(await sha256(bytes))).toEqual(asset);
+  f.session.workspace.current!.release(); f.session.cache.clear();
+  for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
+});
+
+it.each([[], () => undefined])("opacity rejects a non-record request even with valid selected fields (%j)", async (container) => {
+  const f = fixture(); await f.importJson(); const current = f.session.workspace.current!;
+  const input = Object.assign(container, selectedOpacity(f)); clearPositionEffects(f);
+  expect(typeof f.session.setShapeOpacity).toBe("function");
+  await expect(f.session.setShapeOpacity(input)).rejects.toThrow("EDITOR_SHAPE_OPACITY_INPUT_INVALID");
+  expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+});
+
+it.each(["commandId", "revisionId", "createdAt"] as const)("opacity preserves PNG resources when %s generation throws", async (field) => {
+  const f = fixture(); await f.importJson();
+  await f.session.importWorkflow({ kind: "image-import", file: new File([bytes], "image.png", { type: "image/png" }) });
+  const source = f.session.workspace.current!; const image = source.workspace.images[0]!;
+  const pointers = await f.persistence.readPointers("document-1"); clearPositionEffects(f);
+  f.deps[field].mockImplementation(() => { throw new Error("metadata failed"); });
+  expect(typeof f.session.setShapeOpacity).toBe("function");
+  await expect(f.session.setShapeOpacity(selectedOpacity(f))).rejects.toThrow();
+  for (const spy of [f.readPointers, f.readRevision, f.writeRevision, f.readAsset, f.writeAsset,
+    f.deps.sha256, f.decodePng, f.deps.elementIdSource]) expect(spy).not.toHaveBeenCalled();
+  expect(f.session.workspace.current).toBe(source);
+  expect(f.session.cache.resolveImage(image)?.handle).toBe(image.handle);
+  expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+  expect(await f.persistence.readRevision("document-1", source.revision.revisionId)).toEqual(source.revision);
+  for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(handle === image.handle ? 0 : 1);
+});
+
+it("opacity pins generated metadata across queued publication instead of rereading mutable providers", async () => {
+  const f = fixture(); await f.importJson(); const source = f.session.workspace.current!;
+  expect(typeof f.session.setShapeOpacity).toBe("function"); clearPositionEffects(f);
+  const input = { ...selectedOpacity(f, 0.625) }; const flight = f.session.setShapeOpacity(input);
+  for (const spy of [f.deps.commandId, f.deps.revisionId, f.deps.createdAt]) expect(spy).toHaveBeenCalledTimes(1);
+  Object.assign(input, { documentId: "foreign", revisionId: "retargeted", elementId: "missing", opacity: 0 });
+  f.deps.commandId.mockImplementation(() => { throw new Error("late command metadata"); });
+  f.deps.revisionId.mockImplementation(() => { throw new Error("late revision metadata"); });
+  f.deps.createdAt.mockImplementation(() => { throw new Error("late time metadata"); });
+  await expect(flight).resolves.toBeUndefined();
+  const expected = structuredClone(source.revision.document); Object.assign(expected.elements[0]!, { opacity: 0.625 });
+  await expectDurable(f, "revision-2", 2, expected);
+  for (const spy of [f.deps.commandId, f.deps.revisionId, f.deps.createdAt]) expect(spy).toHaveBeenCalledTimes(1);
+});
+
+it("opacity refuses a source released after capture without writing or silently restoring it", async () => {
+  const f = fixture(); await f.importJson(); const source = f.session.workspace.current!;
+  const pointers = await f.persistence.readPointers("document-1"); clearPositionEffects(f);
+  expect(typeof f.session.setShapeOpacity).toBe("function");
+  const flight = f.session.setShapeOpacity(selectedOpacity(f)); source.release();
+  await expect(flight).rejects.toThrow(/EDITOR_SHAPE_OPACITY_/);
+  expect(f.session.workspace.current).toBeNull(); expect(f.writeRevision).not.toHaveBeenCalled();
+  expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+  expect(await f.persistence.readRevision("document-1", "revision-2")).toBeNull();
+  expect(await f.persistence.readRevision("document-1", source.revision.revisionId)).toEqual(source.revision);
 });
