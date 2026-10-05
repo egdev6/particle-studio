@@ -212,6 +212,26 @@ cross-position edits, truthful render warnings and both pagehide settlements.
 The inspector spec extends disabled startup assertions and adds missing-asset and
 restored-render failure cases. These are test coverage, not an execution receipt.
 
+## Shape opacity SDK (issue #122, chain PR2)
+
+`EditorSession.setShapeOpacity(request): Promise<void>` accepts readonly
+`ShapeOpacityRequest` fields: documentId, revisionId, elementId and opacity.
+It reads each scalar once into a frozen intent before callbacks/awaits. A live
+matching source, root/nested shape and safe source.sequence+1 are required before
+IDs/time or digest/decode/cache/persistence effects. New opacity must be a finite
+number in [0, 1], including 0/-0, fractions and 1; schema-valid wider source values
+remain importable. This edits authored base opacity only, not tracks or their overrides.
+A fresh human-UI bridge dispatches `set-shape-opacity` at command revision 0,
+with captured command/revision IDs and timestamp and no element-ID allocation.
+Selected expectedSource, the queued source guard and existing native pointer CAS
+reject stale/released sources and competitors without retry, rebase or retargeting.
+Equal values still create a new durable revision/sequence/pointer, preserving all
+unrelated fields, saved history and PNG asset metadata/bytes. PNG prehydration keeps
+useful retained handles and closes duplicates once; release/cache ownership is unchanged.
+Bounded `EDITOR_SHAPE_OPACITY_*` failures preserve the appropriate prior or durable winner.
+This is non-UI SDK coverage with the real workspace and fake-indexeddb adapter;
+browser facade/native opacity proof, standalone controls and production UI remain future units.
+
 Run `npm run validator:prepare` before
 `npx vitest run --project core apps/editor/tests/editor-frame.test.ts`.
 Use `npm run build`, `npm run dev`, and `npm run preview` for the JSON editor.
