@@ -232,7 +232,7 @@ unrelated fields, saved history and PNG asset metadata/bytes. PNG prehydration k
 useful retained handles and closes duplicates once; release/cache ownership is unchanged.
 Bounded `EDITOR_SHAPE_OPACITY_*` failures preserve the appropriate prior or durable winner.
 SDK coverage uses the real workspace and fake-indexeddb adapter; the browser facade
-and native API coverage follow below. Standalone controls and production UI remain future units.
+and native API coverage follow below. Standalone controls follow in PR4; production UI remains PR5.
 
 ## Browser opacity API (issue #122, chain PR3)
 
@@ -256,7 +256,26 @@ late frame/status updates. A committed external render failure cannot undo publi
 `browser/set-shape-opacity-api.spec.ts` covers native rows, independent canonical
 bytes/SHA, root/nested alpha, PNG usefulness, tracks, reload, genuine CAS winners
 and per-bitmap cleanup. These are coverage descriptions, not execution receipts.
-Opacity controls and production wiring remain issue #122 units PR4/PR5.
+Production opacity wiring remains issue #122 unit PR5; the existing production entry still has six controls.
+
+## Standalone opacity controls (issue #122, chain PR4)
+
+`mountEditorOpacityControls` accepts a form, **Shape opacity** input, **Apply opacity**
+button, named **Opacity status**, activity, source/selection providers, SDK action
+and publication callback. Ready, matching published root/nested shape metadata enables
+editing; five other variants stay inspectable/read-only. Prefill is authored truth,
+including finite-wide -0.25/2, never tracks, option text or unsent JSON. Only new requests
+require trimmed-nonempty finite [0, 1], including 0/-0, fractions, 1 and equal values;
+there is no clamp or migration. Preserved tracks may override authored opacity at playback.
+Raw input is read once; four frozen source/value scalars and local reentry exclusion
+precede activity callbacks. Shared activity and authoritative SDK guards support all
+seven origins, including forced events. Own BEGIN/END preserves success, rejection and
+committed-render warnings; external position/dimension settlement refreshes actual-source
+guidance. Changed document/revision requires reselection even with equal values/stable IDs;
+same-source rejection preserves selection and typed input. Dispose before inspector null
+notification: listener removal is idempotent and late output is suppressed, without
+rendering, cancellation or bitmap/cache/database ownership. `editor-opacity-controls.test.tsx`
+describes standalone DOM, fault and settlement coverage, not a production UI execution receipt.
 
 Run `npm run validator:prepare` before
 `npx vitest run --project core apps/editor/tests/editor-frame.test.ts`.
