@@ -5,6 +5,7 @@ import { mountEditorPngImportControls } from "./editor-png-import-controls.js";
 import { mountEditorRectangleControls } from "./editor-rectangle-controls.js";
 import { mountEditorElementInspector } from "./editor-element-inspector.js";
 import { mountEditorPositionControls } from "./editor-position-controls.js";
+import { mountEditorDimensionControls } from "./editor-dimension-controls.js";
 import { renderEditorFrame } from "./editor-frame.js";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#scene")!;
@@ -12,11 +13,15 @@ const status = document.querySelector<HTMLElement>("#status")!;
 const pngStatus = document.querySelector<HTMLElement>("#png-status")!;
 const browser = createBrowserEditorSession();
 let positionControls: ReturnType<typeof mountEditorPositionControls> | undefined;
+let dimensionControls: ReturnType<typeof mountEditorDimensionControls> | undefined;
 const inspector = mountEditorElementInspector({
   select: document.querySelector<HTMLSelectElement>("#scene-element")!,
   details: document.querySelector<HTMLElement>("#element-details")!,
   status: document.querySelector<HTMLElement>("#element-status")!,
-  onSelectionChange: () => positionControls?.syncSelection(),
+  onSelectionChange: () => {
+    positionControls?.syncSelection();
+    dimensionControls?.syncSelection();
+  },
 });
 const currentMetadata = () => {
   const current = browser.current;
@@ -44,6 +49,7 @@ const activity: EditorImportActivity = {
     pngControls.setBusy(true);
     rectangleControls.setBusy(true);
     positionControls?.setBusy(true);
+    dimensionControls?.setBusy(true);
     inspector.setBusy(true);
     return true;
   },
@@ -61,6 +67,9 @@ const activity: EditorImportActivity = {
     positionControls?.setBusy(false);
     positionControls?.setReady(ready);
     positionControls?.syncSelection();
+    dimensionControls?.setBusy(false);
+    dimensionControls?.setReady(ready);
+    dimensionControls?.syncSelection();
   },
 };
 const renderCurrent = () => {
@@ -134,12 +143,30 @@ positionControls = mountEditorPositionControls({
     return message;
   },
 });
+dimensionControls = mountEditorDimensionControls({
+  form: document.querySelector<HTMLFormElement>("#shape-dimensions")!,
+  dimensions: {
+    width: document.querySelector<HTMLInputElement>("#dimension-width")!,
+    height: document.querySelector<HTMLInputElement>("#dimension-height")!,
+  },
+  button: document.querySelector<HTMLButtonElement>("#apply-dimensions")!,
+  status: document.querySelector<HTMLElement>("#dimension-status")!,
+  activity, getSelection: inspector.getSelection, getCurrent: currentMetadata,
+  setShapeDimensions: browser.setShapeDimensions,
+  onPublished: () => {
+    const message = renderCurrent();
+    status.textContent = message;
+    return message;
+  },
+});
 positionControls.syncSelection();
+dimensionControls.syncSelection();
 window.addEventListener("pagehide", () => {
   controls.dispose();
   pngControls.dispose();
   rectangleControls.dispose();
   positionControls?.dispose();
+  dimensionControls?.dispose();
   inspector.dispose();
   void browser.dispose();
 }, { once: true });
@@ -161,6 +188,8 @@ async function renderStartup() {
     rectangleControls.setReady(true, browser.current !== null);
     positionControls?.setReady(true);
     positionControls?.syncSelection();
+    dimensionControls?.setReady(true);
+    dimensionControls?.syncSelection();
   } catch (error) {
     if (browser.disposed) return;
     const message = error instanceof Error ? error.message : "Unable to restore scene.";
@@ -169,6 +198,8 @@ async function renderStartup() {
     document.querySelector<HTMLElement>("#rectangle-status")!.textContent = `Rectangle creation unavailable. ${message}`;
     positionControls?.setReady(false);
     document.querySelector<HTMLElement>("#position-status")!.textContent = `Position editing unavailable. ${message}`;
+    dimensionControls?.setReady(false);
+    document.querySelector<HTMLElement>("#dimension-status")!.textContent = `Dimension editing unavailable. ${message}`;
   }
 }
 void renderStartup();

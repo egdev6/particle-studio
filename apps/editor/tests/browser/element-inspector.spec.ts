@@ -16,6 +16,14 @@ async function positionDisabled(page: Page) {
   await expect(page.getByLabel("Position Y", { exact: true })).toBeDisabled();
   await button(page, "Apply position").dispatchEvent("click");
   await page.locator("#shape-position").dispatchEvent("submit");
+  await expect(button(page, "Apply dimensions")).toBeDisabled();
+  for (const axis of ["width", "height"]) {
+    await expect(page.getByLabel(`Dimension ${axis}`, { exact: true })).toBeDisabled();
+    await expect(page.getByLabel(`Dimension ${axis}`, { exact: true })).toHaveValue("");
+  }
+  await expect(page.getByRole("status", { name: "Dimension status", exact: true })).toBeVisible();
+  await button(page, "Apply dimensions").dispatchEvent("click");
+  await page.locator("#shape-dimensions").dispatchEvent("submit");
 }
 const blank = (): SceneDocumentV1 => ({ schemaVersion: 1, durationUs: 1_000_000, seed: 42, loop: true,
   playbackRange: { startUs: 0, endUs: 1_000_000 }, tracks: [], rootIds: ["root"],
@@ -293,6 +301,7 @@ for (const gate of ["absent", "saved-only", "corrupt", "context", "pending"] as 
         const before = await nativeRows(page); const frozen = await pane(page);
         await select(page).dispatchEvent("change"); expect(await pane(page)).toEqual(frozen);
         await set(page, { settle: "yes" }); await expect(page.locator("#status")).toContainText("sample");
+        await positionDisabled(page);
         expect(await nativeRows(page)).toEqual(before);
       }
       await expect(details(page)).toHaveText(""); return;
@@ -309,5 +318,26 @@ for (const gate of ["absent", "saved-only", "corrupt", "context", "pending"] as 
     await positionDisabled(page);
     await select(page).dispatchEvent("change"); await expect(details(page)).toHaveText("");
     expect(await nativeRows(page)).toEqual(before);
+  });
+}
+
+for (const gate of ["missing-asset", "restored-render"] as const) {
+  test(`startup ${gate} preserves draft rows and disables both shape controllers`, async ({ page }) => {
+    await open(page); const document = rich();
+    if (gate === "missing-asset") {
+      document.rootIds.push("image");
+      document.elements.push({ id: "image", type: "image", x: 180, y: 40, width: 8, height: 8, opacity: 1,
+        asset: { sha256: hash, mimeType: "image/png", byteLength: png.length, intrinsicWidth: 1, intrinsicHeight: 1 } });
+    }
+    const row = revision(document, "draft-41", 41);
+    const before = await nativeRows(page, { revisions: [row], pointers: [{ documentId: BROWSER_DOCUMENT, saved: null,
+      draft: { kind: "draft", documentId: BROWSER_DOCUMENT, revisionId: row.revisionId, sequence: row.sequence } }] });
+    if (gate === "restored-render") await page.addInitScript(() => {
+      CanvasRenderingContext2D.prototype.clearRect = () => { throw new Error("Restored frame cannot render"); };
+    });
+    await page.reload(); await expect(page.locator("#status")).toContainText("Error:");
+    await expect(select(page)).toBeDisabled(); await expect(details(page)).toHaveText("");
+    await positionDisabled(page); await select(page).dispatchEvent("change");
+    expect(await nativeRows(page)).toEqual(before); await expect(details(page)).toHaveText("");
   });
 }
