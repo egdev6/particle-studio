@@ -217,7 +217,7 @@ SceneDocument/SDK. No son APIs `window` ni endpoints del fixture. Sigue cada con
 | Exportar escena aprobada | [Export](../packages/export/README.md): crear evidencia genuina/approval, aportar assets verificados y providers confiables, construir mapa y persistirlo como caller |
 | Despachar tools a un workspace port | [WebMCP adapter](../packages/webmcp-adapter/README.md); host registra/autoriza, no la entrada UI |
 | Operar draft headless por MCP stdio | [Guía headless](../apps/headless-mcp/README.md); raíces propias y cinco tools |
-| Crear→editar→persistir→aprobar→exportar ESM | Cookbook del SDK (`sdk-cookbook.md`, pendiente en esta cadena) |
+| Crear→editar→persistir→aprobar→exportar ESM | [Cookbook del SDK](sdk-cookbook.md) |
 
 Export tiene ESM/web component/IIFE/HTML, no PNG/WebM/vídeo ni descarga UI. No se
 puede sustituir aprobación branded por JSON plano ni omitir providers/asset reader.
