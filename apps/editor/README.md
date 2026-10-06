@@ -1,5 +1,9 @@
 # Editor frame rendering
 
+Para operar la UI, sigue el [manual funcional](../../docs/functional-guide.md).
+La [matriz de fronteras](../../docs/boundary-matrix.md) separa dominio, SDK y prueba nativa;
+este README conserva los contratos técnicos y descripciones históricas de cobertura.
+
 `src/editor-frame.ts` composes the existing runtime and Canvas2D renderer.
 `createRuntimeImageResolver(images)` maps cached PNG hashes to borrowed handles,
 MIME type, byte length, and intrinsic dimensions. Unknown hashes resolve to
