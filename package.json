@@ -30,14 +30,12 @@
     "test:integration": "vitest run --project integration",
     "pretest:browser": "npm run validator:prepare",
     "test:browser": "playwright test --project chromium --project chromium-preview",
-    "pretest:performance": "npm run validator:prepare",
-    "test:performance": "playwright test --project chromium-performance",
     "pretest:product": "npm run validator:prepare",
     "test:product": "npm run test:unit && npm run test:integration && npm run test:browser",
     "pretest": "npm run validator:prepare",
     "test": "npm run test:product",
     "pretypecheck": "npm run validator:prepare",
-    "typecheck": "tsc -b --pretty false"
+    "typecheck": "node --test scripts/tests/typecheck.test.mjs && node scripts/typecheck.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",

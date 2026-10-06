@@ -2,7 +2,15 @@ name: Focused CI
 
 on:
   pull_request:
-    branches: [develop, main]
+    branches:
+      - develop
+      - main
+      - chore/docs-qa-sdk-tooling
+      - fix/docs-qa-01-root-checks
+      - docs/docs-qa-02-overview-boundaries
+      - docs/docs-qa-03-headless-deployment
+      - docs/docs-qa-04-functional-guide
+      - docs/docs-qa-05-agent-qa
   push:
     branches: [develop, main]
 
@@ -44,18 +52,7 @@ jobs:
       - name: Test browser PNG platform in Chromium
         run: npm run test:browser
       - name: Typecheck focused packages
-        run: |
-          npx tsc -p packages/scene-document/tsconfig.json --noEmit --pretty false
-          npx tsc -p packages/runtime/tsconfig.json --noEmit --pretty false
-          npx tsc -p packages/renderer-canvas2d/tsconfig.json --noEmit --pretty false
-          npx tsc -p packages/commands/tsconfig.json --noEmit --pretty false
-          npx tsc -p packages/persistence/tsconfig.json --pretty false
-          npx tsc -p packages/persistence-indexeddb/tsconfig.json --noEmit --pretty false
-          npx tsc -p packages/persistence-fs/tsconfig.json --noEmit --pretty false
-          npx tsc -p packages/export/tsconfig.json --noEmit --pretty false
-          npx tsc -p packages/webmcp-adapter/tsconfig.json --noEmit --pretty false
-          npx tsc -p apps/headless-mcp/tsconfig.json --noEmit --pretty false
-          npx tsc -p apps/editor/tsconfig.json --noEmit --pretty false
+        run: npm run typecheck
       - name: Build headless MCP smoke image
         timeout-minutes: 20
         run: docker build --progress=plain -f apps/headless-mcp/Dockerfile -t particle-studio-headless-mcp:d1-smoke .
