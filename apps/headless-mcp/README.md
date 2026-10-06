@@ -2,7 +2,7 @@
 
 Esta app opera un draft durable confinado con **cinco tools MCP por stdin/stdout**.
 No sirve HTTP, editor, puertos ni health endpoint; no concede aprobación humana.
-Ruta: [índice](../../README.md) · manual del proyecto (`../../docs/functional-guide.md`, pendiente en esta cadena)
+Ruta: [índice](../../README.md) · [manual del proyecto](../../docs/functional-guide.md)
 · [matriz](../../docs/boundary-matrix.md) · [contenedor local](../../docs/deployment.md).
 
 ## 1. Preparar un workspace propio
