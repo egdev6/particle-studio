@@ -28,6 +28,8 @@ The [`src/index.ts`](src/index.ts) entrypoint exports `renderCommands(context, c
 
 Commands execute in input order. Each command calls `save()`, sets `globalAlpha` to its opacity, applies its optional six-value affine transform, draws, then calls `restore()` to isolate Canvas state between commands.
 
+`draw-shape` writes `fillStyle` before `fillRect`: the authored `fillColor` when present, otherwise `#000000`. `fillStyle` is a DOM-free asymmetric accessor — the renderer writes a CSS color string and never reads it, while the readable side stays opaque. That write stays inside the command's `save()`/`restore()`, so other commands and the caller's fill state are untouched. The exported runtime consumes this same renderer, so IIFE builds inherit the behavior. Dedicated color-editing commands and editor controls are not implemented in this unit.
+
 For `draw-image`, `resolved` must be a non-null object. A non-object handle throws `CANVAS_IMAGE_HANDLE_INVALID` before any context operation for that command. This guard does **not** verify that the object is a valid browser `CanvasImageSource`; the caller is responsible for supplying a drawable resolved image.
 
 See [`tests/entrypoint.smoke.test.ts`](tests/entrypoint.smoke.test.ts) for the recording-context contract and [`../runtime/README.md`](../runtime/README.md) for scene evaluation and image resolution.

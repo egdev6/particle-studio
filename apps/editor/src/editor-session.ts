@@ -60,6 +60,14 @@ export interface ShapeOpacityRequest {
   readonly opacity: number;
 }
 
+/** One selected published shape and its authored six-digit RGB fill color. */
+export interface ShapeFillColorRequest {
+  readonly documentId: string;
+  readonly revisionId: string;
+  readonly elementId: string;
+  readonly fillColor: string;
+}
+
 export interface EditorSession {
   readonly workspace: DurableDraftWorkspace;
   readonly cache: PngImageCache;
@@ -70,6 +78,7 @@ export interface EditorSession {
   setShapePosition(request: ShapePositionRequest): Promise<void>;
   setShapeDimensions(request: ShapeDimensionsRequest): Promise<void>;
   setShapeOpacity(request: ShapeOpacityRequest): Promise<void>;
+  setShapeFillColor(request: ShapeFillColorRequest): Promise<void>;
 }
 
 /**
@@ -293,6 +302,49 @@ export function createEditorSession(deps: EditorSessionDependencies): EditorSess
         payload: { type: "set-shape-opacity", elementId, opacity },
       });
       if (!result.ok) throw new Error(`EDITOR_SHAPE_OPACITY_${result.error.code}`);
+    },
+    setShapeFillColor: async (request: ShapeFillColorRequest): Promise<void> => {
+      let selection: ShapeFillColorRequest;
+      try {
+        if (request === null || typeof request !== "object" || Array.isArray(request)) {
+          throw new Error();
+        }
+        selection = Object.freeze({ documentId: request.documentId, revisionId: request.revisionId,
+          elementId: request.elementId, fillColor: request.fillColor });
+      } catch { throw new Error("EDITOR_SHAPE_FILL_COLOR_INPUT_INVALID"); }
+      const current = workspace.current;
+      if (!current || current.revision.documentId !== captured.documentId ||
+        !Number.isSafeInteger(current.revision.sequence) || current.revision.sequence < 0 ||
+        !Number.isSafeInteger(current.revision.sequence + 1)) {
+        throw new Error("EDITOR_SHAPE_FILL_COLOR_SOURCE_UNAVAILABLE");
+      }
+      const { documentId, revisionId: selectedRevisionId, elementId, fillColor } = selection;
+      if (typeof documentId !== "string" || !documentId ||
+        typeof selectedRevisionId !== "string" || !selectedRevisionId ||
+        typeof elementId !== "string" || !elementId) {
+        throw new Error("EDITOR_SHAPE_FILL_COLOR_INPUT_INVALID");
+      }
+      if (documentId !== current.revision.documentId || selectedRevisionId !== current.revision.revisionId) {
+        throw new Error("EDITOR_SHAPE_FILL_COLOR_SOURCE_MISMATCH");
+      }
+      const element = current.revision.document.elements.find((candidate) => candidate.id === elementId);
+      if (element?.type !== "shape" || typeof fillColor !== "string" ||
+        fillColor.length !== 7 || !/^#[0-9A-Fa-f]{6}$/.test(fillColor)) {
+        throw new Error("EDITOR_SHAPE_FILL_COLOR_INPUT_INVALID");
+      }
+      // Bind the genuine source before metadata callbacks; queued publication
+      // retains expectedSource and the existing conditional-write authority.
+      const bridge = createEditorDurableEditing({ workspace,
+        revisionId: () => revisionId, createdAt: () => createdAt });
+      if (!bridge.ok) throw new Error("EDITOR_SHAPE_FILL_COLOR_SOURCE_UNAVAILABLE");
+      const commandId = captured.commandId();
+      const revisionId = captured.revisionId();
+      const createdAt = captured.createdAt();
+      const result = await bridge.editing.dispatch({ commandSchemaVersion: 1,
+        commandId, documentId, expectedRevision: 0, actorCapability: "human-ui",
+        payload: { type: "set-shape-fill-color", elementId, fillColor },
+      });
+      if (!result.ok) throw new Error(`EDITOR_SHAPE_FILL_COLOR_${result.error.code}`);
     },
     createAgent: (): EditorBrowserAgentWorkspaceResult => {
       const current = workspace.current;

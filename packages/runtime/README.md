@@ -27,6 +27,8 @@ The package entrypoint is [`src/index.ts`](src/index.ts). Its runtime values are
 
 Visible leaves are traversed in root/child order, with group visibility and composed transforms applied. Commands correspond to evaluated shape, line, text, particle, and image elements (`draw-shape`, `draw-line`, `draw-text`, `draw-particles`, `draw-image`); they are drawing instructions, not a renderer. A non-identity effective transform is included on the element and command.
 
+A shape's optional authored `fillColor` (`#RRGGBB`) is transported verbatim on both the evaluated shape and its `draw-shape` command, without normalizing case. When the authored field is absent, it stays absent from both objects; runtime never materializes a default color, so existing exact object shapes are unchanged. Dedicated color-editing commands and editor controls are not implemented in this unit.
+
 For a visible image, pass `{ imageResolver }` to evaluation or transport. `resolve(asset)` must return a non-null handle and metadata matching the document asset's SHA-256, MIME type, byte length, and intrinsic dimensions; missing resolvers, unresolved assets, and mismatches throw. The command carries the returned opaque handle as `resolved`; runtime does not load or decode the asset. Invisible images are not resolved.
 
 See [`tests/entrypoint.smoke.test.ts`](tests/entrypoint.smoke.test.ts) for executable examples and [`../scene-document/README.md`](../scene-document/README.md) for document validation and the generated-validator contract.

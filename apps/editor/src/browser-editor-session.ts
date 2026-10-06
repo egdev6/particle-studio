@@ -1,7 +1,7 @@
 import { createIndexedDbPersistenceAdapter } from "@particle-studio/persistence-indexeddb";
 import type { DurableDraftPublication } from "./durable-draft-workspace.js";
 import { browserPngDecodePrimitive, browserSha256 } from "./browser-png-platform.js";
-import { createEditorSession, type ShapeDimensionsRequest, type ShapeOpacityRequest, type ShapePositionRequest } from "./editor-session.js";
+import { createEditorSession, type ShapeDimensionsRequest, type ShapeFillColorRequest, type ShapeOpacityRequest, type ShapePositionRequest } from "./editor-session.js";
 import { EMPTY_SCENE_JSON } from "./empty-scene.js";
 
 // One local editor slot; absence never creates a durable document.
@@ -168,6 +168,24 @@ export function createBrowserEditorSession() {
       return ownAction(() => session.setShapeOpacity(selection));
     } catch { return Promise.reject(new Error("EDITOR_SHAPE_OPACITY_INPUT_INVALID")); }
   };
+  const setShapeFillColor = (request: ShapeFillColorRequest): Promise<BrowserCurrent | null> => {
+    if (disposed || !ready || importBusy || !currentView()) {
+      return Promise.reject(new Error("EDITOR_SHAPE_FILL_COLOR_UNAVAILABLE"));
+    }
+    try {
+      if (request === null || typeof request !== "object" || Array.isArray(request)) {
+        throw new Error("EDITOR_SHAPE_FILL_COLOR_INPUT_INVALID");
+      }
+      // Capture before entering the owned lane or invoking SDK callbacks.
+      const selection = Object.freeze({ documentId: request.documentId, revisionId: request.revisionId,
+        elementId: request.elementId, fillColor: request.fillColor });
+      // Caller getters can synchronously start another action or dispose.
+      if (disposed || !ready || importBusy || !currentView()) {
+        return Promise.reject(new Error("EDITOR_SHAPE_FILL_COLOR_UNAVAILABLE"));
+      }
+      return ownAction(() => session.setShapeFillColor(selection));
+    } catch { return Promise.reject(new Error("EDITOR_SHAPE_FILL_COLOR_INPUT_INVALID")); }
+  };
   const dispose = (): Promise<void> => {
     if (disposal) return disposal;
     disposed = true;
@@ -179,6 +197,6 @@ export function createBrowserEditorSession() {
     });
     return disposal;
   };
-  return Object.freeze({ start, createScene, importJson, importPng, addRectangle, setShapePosition, setShapeDimensions, setShapeOpacity, dispose,
+  return Object.freeze({ start, createScene, importJson, importPng, addRectangle, setShapePosition, setShapeDimensions, setShapeOpacity, setShapeFillColor, dispose,
     get current() { return currentView(); }, get disposed() { return disposed; } });
 }

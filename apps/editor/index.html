@@ -87,6 +87,15 @@
         <button id="apply-opacity" type="submit" disabled>Apply opacity</button>
       </form>
       <p id="opacity-status" role="status" aria-label="Opacity status" aria-live="polite" aria-atomic="true">Loading local scene…</p>
+      <form id="shape-fill-color" aria-label="Shape fill color controls" aria-busy="false" novalidate>
+        <fieldset>
+          <legend>Selected shape authored fill color as #RRGGBB; absence renders black by fallback</legend>
+          <label for="shape-fill-color-value">Shape fill color</label>
+          <input id="shape-fill-color-value" type="text" autocomplete="off" disabled />
+        </fieldset>
+        <button id="apply-fill-color" type="submit" disabled>Apply fill color</button>
+      </form>
+      <p id="fill-color-status" role="status" aria-label="Fill color status" aria-live="polite" aria-atomic="true">Loading local scene…</p>
     </section>
     <p id="status" role="status">Loading local scene…</p>
     <canvas id="scene" width="256" height="160" aria-label="Current scene"></canvas>

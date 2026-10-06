@@ -1272,6 +1272,101 @@ describe("approved IIFE virtual export", () => {
     returned[0] ^= 0xff;
     expect(first.files.get("particle-studio.iife.js")).not.toEqual(returned);
   }, 20_000);
+
+  it("renders an authored shape color through the genuine IIFE browser controller", async () => {
+    const colorDocument: SceneDocumentV1 = {
+      ...structuredClone(FIRST_SLICE_DOCUMENT),
+      rootIds: ["color-shape"],
+      tracks: [],
+      elements: [
+        {
+          id: "color-shape",
+          type: "shape",
+          x: 0,
+          y: 0,
+          width: 4,
+          height: 4,
+          opacity: 0.5,
+          fillColor: "#3Fa9F5",
+        },
+      ],
+    };
+    const exported = await buildApprovedIifeVirtualMap({
+      approval: await approval(colorDocument),
+      assets: assetsByHash([]),
+      runtimeGraphProvider: await genuineRuntimeProvider(),
+      iifeBundleProvider: genuineIifeProvider(),
+    });
+
+    let appended: unknown;
+    class FakeHTMLElement {
+      append(child: unknown) {
+        appended = child;
+      }
+    }
+    const writes: Array<{ fillStyle: string; globalAlpha: number }> = [];
+    const stack: Array<{ fillStyle: string; globalAlpha: number }> = [];
+    const context2d = {
+      fillStyle: "#ffffff",
+      globalAlpha: 1,
+      save(this: { fillStyle: string; globalAlpha: number }) {
+        stack.push({ fillStyle: this.fillStyle, globalAlpha: this.globalAlpha });
+      },
+      restore(this: { fillStyle: string; globalAlpha: number }) {
+        const previous = stack.pop();
+        if (previous) {
+          this.fillStyle = previous.fillStyle;
+          this.globalAlpha = previous.globalAlpha;
+        }
+      },
+      fillRect(this: { fillStyle: string; globalAlpha: number }) {
+        writes.push({ fillStyle: this.fillStyle, globalAlpha: this.globalAlpha });
+      },
+    };
+    let removed = false;
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: () => context2d,
+      remove: () => {
+        removed = true;
+      },
+    };
+    const sandbox: Record<string, unknown> = {
+      TextEncoder,
+      TextDecoder,
+      URL,
+      crypto,
+      AbortController,
+      HTMLElement: FakeHTMLElement,
+      document: {
+        currentScript: { src: "https://example.test/particle-studio.iife.js" },
+        createElement: (tag: string) => (tag === "canvas" ? canvas : undefined),
+      },
+    };
+    sandbox.globalThis = sandbox;
+    runInNewContext(
+      new TextDecoder().decode(exported.files.get("particle-studio.iife.js")!),
+      sandbox,
+    );
+    const studio = sandbox.ParticleStudio as {
+      mount(node: unknown): {
+        ready: Promise<unknown>;
+        renderAt(timeUs: number): unknown;
+        destroy(): void;
+      };
+    };
+    const controller = studio.mount(new FakeHTMLElement());
+    try {
+      await controller.ready;
+      controller.renderAt(0);
+      expect(appended).toBe(canvas);
+      expect(writes).toEqual([{ fillStyle: "#3Fa9F5", globalAlpha: 0.5 }]);
+    } finally {
+      controller.destroy();
+    }
+    expect(removed).toBe(true);
+  }, 20_000);
 });
 
 describe("approved Web Component virtual export", () => {

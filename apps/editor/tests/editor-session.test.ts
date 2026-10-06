@@ -1225,3 +1225,141 @@ it("opacity refuses a source released after capture without writing or silently 
   expect(await f.persistence.readRevision("document-1", "revision-2")).toBeNull();
   expect(await f.persistence.readRevision("document-1", source.revision.revisionId)).toEqual(source.revision);
 });
+
+import { describe } from "vitest";
+
+describe("shape fill color editing API", () => {
+  type FillColorRequest = { readonly documentId: string; readonly revisionId: string; readonly elementId: string; readonly fillColor: string };
+  type FillColorEditor = ReturnType<typeof createEditorSession>;
+  const fillColorRequest = (f: ReturnType<typeof fixture>, fillColor = "#3fa9f5"): FillColorRequest => {
+    const source = f.session.workspace.current!.revision;
+    return { documentId: source.documentId, revisionId: source.revisionId, elementId: "shape-1", fillColor };
+  };
+  const colorSession = (f: ReturnType<typeof fixture>) => f.session as FillColorEditor;
+
+  it.each(["root", "nested"])('fill color publishes exact %s content preserving the rest of the document', async (placement) => {
+    const f = fixture(); const document = documentAt(0.4);
+    document.seed = 99; document.loop = false; document.playbackRange.startUs = 500_000;
+    Object.assign(document.elements[0]!, { width: 31, height: 47, opacity: 0.6,
+      transform: [1, 0.5, 0, 2, 10, -20], visible: false });
+    if (placement === "nested") { document.rootIds = ["group"];
+      document.elements.push({ id: "group", type: "group", childrenIds: ["shape-1"], transform: [1, 0, 0, 1, 30, 40] }); }
+    await f.importJson(document); const source = f.session.workspace.current!;
+    expect(typeof colorSession(f).setShapeFillColor).toBe("function");
+    const real = durableEditing.createEditorDurableEditing; const dispatch = vi.fn(); const publish = vi.fn();
+    const bridge = vi.spyOn(durableEditing, "createEditorDurableEditing").mockImplementation((options) => {
+      const result = real({ ...options, workspace: { get current() { return options.workspace.current; },
+        publish: (request) => { publish(request); return options.workspace.publish(request); },
+        reload: options.workspace.reload.bind(options.workspace) } });
+      if (!result.ok) return result;
+      return { ok: true, editing: { snapshot: result.editing.snapshot.bind(result.editing),
+        undo: result.editing.undo.bind(result.editing), redo: result.editing.redo.bind(result.editing),
+        dispatch: (command) => { dispatch(command); return result.editing.dispatch(command); } } };
+    });
+    const fillColor = placement === "root" ? "#3FA9F5" : "#3Fa9F5";
+    const input = { ...fillColorRequest(f, fillColor) }; const reads: string[] = []; const captured = { ...input };
+    for (const key of Object.keys(input) as (keyof FillColorRequest)[]) Object.defineProperty(captured, key, { get() { reads.push(key); return input[key]; } });
+    clearPositionEffects(f);
+    f.deps.commandId.mockImplementation(() => {
+      expect(reads).toEqual(["documentId", "revisionId", "elementId", "fillColor"]);
+      Object.assign(input, { documentId: "foreign", revisionId: "retargeted", elementId: "group", fillColor: "#ffffff" });
+      return "fill-command";
+    });
+    const flight = colorSession(f).setShapeFillColor(captured); input.fillColor = "#000000"; await expect(flight).resolves.toBeUndefined();
+    const expected = structuredClone(source.revision.document); Object.assign(expected.elements[0]!, { fillColor });
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith({ commandSchemaVersion: 1, commandId: "fill-command",
+      documentId: "document-1", expectedRevision: 0, actorCapability: "human-ui",
+      payload: { type: "set-shape-fill-color", elementId: "shape-1", fillColor } });
+    expect(publish.mock.calls[0]![0]).toMatchObject({ sequence: source.revision.sequence + 1,
+      expectedSource: { documentId: "document-1", revisionId: source.revision.revisionId } });
+    await expectDurable(f, "revision-2", 2, expected);
+    expect(await f.persistence.readRevision("document-1", source.revision.revisionId)).toEqual(source.revision);
+    expect(reads).toEqual(["documentId", "revisionId", "elementId", "fillColor"]); expect(f.deps.elementIdSource).not.toHaveBeenCalled();
+    await expect(colorSession(f).setShapeFillColor(fillColorRequest(f, fillColor))).resolves.toBeUndefined();
+    await expectDurable(f, "revision-3", 3, structuredClone(expected)); expect(bridge).toHaveBeenCalledTimes(2);
+  });
+
+  const invalidFillColors = ["#3a9", "#3fa9f5ff", "rebeccapurple", "rgb(63,169,245)", "#3fa9fg", " #3fa9f5", "#3fa9f5 ", "#3fa9f5\n", 0x3fa9f5, null, true, ["#3fa9f5"], { hex: "#3fa9f5" }] as const;
+  it.each([
+    ...invalidFillColors.map((fillColor) => ["color", { fillColor }] as const),
+    ["empty document", { documentId: "" }], ["foreign document", { documentId: "foreign" }],
+    ["nonstring document", { documentId: 3 }], ["empty revision", { revisionId: "" }],
+    ["stale revision", { revisionId: "old" }], ["nonstring revision", { revisionId: null }],
+    ["empty target", { elementId: "" }], ["unknown target", { elementId: "unknown" }],
+    ["nonstring target", { elementId: 3 }], ["non-shape target", { elementId: "group" }],
+  ] as const)("fill color rejects %s before every effect (%j)", async (_name, invalid) => {
+    const f = fixture(); const document = documentAt(0.4);
+    document.elements.push({ id: "group", type: "group", childrenIds: [] }); document.rootIds.push("group");
+    await f.importJson(document); const current = f.session.workspace.current!; clearPositionEffects(f);
+    for (const spy of [f.deps.commandId, f.deps.revisionId, f.deps.createdAt]) spy.mockImplementation(() => { throw new Error("metadata must not run"); });
+    expect(typeof colorSession(f).setShapeFillColor).toBe("function");
+    await expect(colorSession(f).setShapeFillColor({ ...fillColorRequest(f), ...invalid } as FillColorRequest)).rejects.toThrow(/EDITOR_SHAPE_FILL_COLOR_/);
+    expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+  });
+
+  it.each([null, undefined, {}, [], "request", 3, true, () => undefined])(
+    "fill color rejects malformed request %j with bounded input failure", async (input) => {
+      const f = fixture(); await f.importJson(); const current = f.session.workspace.current!; clearPositionEffects(f);
+      expect(typeof colorSession(f).setShapeFillColor).toBe("function");
+      await expect(colorSession(f).setShapeFillColor(input as FillColorRequest)).rejects.toThrow("EDITOR_SHAPE_FILL_COLOR_INPUT_INVALID");
+      expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+    },
+  );
+
+  it.each(["documentId", "revisionId", "elementId", "fillColor"] as const)("fill color bounds a throwing %s getter before metadata", async (field) => {
+    const f = fixture(); await f.importJson(); const current = f.session.workspace.current!;
+    const input = fillColorRequest(f); Object.defineProperty(input, field, { get() { throw new Error("caller getter"); } });
+    clearPositionEffects(f); expect(typeof colorSession(f).setShapeFillColor).toBe("function");
+    await expect(colorSession(f).setShapeFillColor(input)).rejects.toThrow("EDITOR_SHAPE_FILL_COLOR_INPUT_INVALID");
+    expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+  });
+
+  it.each(["missing", "foreign", "overflow", "released"])("fill color rejects %s current without adopting or modifying it", async (kind) => {
+    const f = fixture();
+    if (kind !== "missing") await f.session.workspace.publish({ documentId: kind === "foreign" ? "foreign" : "document-1",
+      editableJson: JSON.stringify(documentAt(0.4)), revisionId: () => "source",
+      sequence: kind === "overflow" ? Number.MAX_SAFE_INTEGER : 1, createdAt: () => 1234 });
+    if (kind === "released") f.session.workspace.current!.release();
+    const current = f.session.workspace.current; clearPositionEffects(f);
+    expect(typeof colorSession(f).setShapeFillColor).toBe("function");
+    await expect(colorSession(f).setShapeFillColor({ documentId: "document-1", revisionId: "source", elementId: "shape-1", fillColor: "#3fa9f5" }))
+      .rejects.toThrow("EDITOR_SHAPE_FILL_COLOR_SOURCE_UNAVAILABLE");
+    expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+  });
+
+  it.each(["preparation", "write", "invalid-publication", "competitor-before", "competitor-during"])(
+    "fill color preserves the prior or native CAS winner on %s without retry", async (fault) => {
+      const f = fixture(); await f.importJson(); const source = f.session.workspace.current!;
+      const pointers = await f.persistence.readPointers("document-1");
+      const winner = createCompleteRevision({ documentId: "document-1", revisionId: "external-winner", sequence: 2, document: documentAt(0.8) });
+      const winnerPointers = { saved: null, draft: { kind: "draft" as const, documentId: "document-1", revisionId: winner.revisionId, sequence: 2 } };
+      if (fault === "competitor-before") await f.persistence.writeCompleteRevision(winner, winnerPointers);
+      if (fault === "preparation") f.readPointers.mockRejectedValueOnce(new Error("prepare failed"));
+      if (fault === "write") f.writeRevision.mockRejectedValueOnce(new Error("write failed"));
+      if (fault === "invalid-publication") f.deps.createdAt.mockReturnValue(-1);
+      if (fault === "competitor-during") f.readPointers.mockImplementationOnce(async (...args) => {
+        const held = await f.realReadPointers(...args); await f.persistence.writeCompleteRevision(winner, winnerPointers); return held; });
+      f.writeRevision.mockClear(); expect(typeof colorSession(f).setShapeFillColor).toBe("function");
+      await expect(colorSession(f).setShapeFillColor(fillColorRequest(f))).rejects.toThrow(/EDITOR_SHAPE_FILL_COLOR_/);
+      expect(f.session.workspace.current).toBe(source);
+      expect(await f.persistence.readRevision("document-1", "revision-2")).toBeNull();
+      expect(await f.persistence.readRevision("document-1", source.revision.revisionId)).toEqual(source.revision);
+      if (fault.startsWith("competitor")) expect(await f.persistence.readPointers("document-1")).toEqual(winnerPointers);
+      else expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+    });
+
+  it("fill color pins generated metadata and captured scalars across queued publication", async () => {
+    const f = fixture(); await f.importJson(); const source = f.session.workspace.current!;
+    expect(typeof colorSession(f).setShapeFillColor).toBe("function"); clearPositionEffects(f);
+    const input = { ...fillColorRequest(f) }; const flight = colorSession(f).setShapeFillColor(input);
+    for (const spy of [f.deps.commandId, f.deps.revisionId, f.deps.createdAt]) expect(spy).toHaveBeenCalledTimes(1);
+    Object.assign(input, { documentId: "foreign", revisionId: "retargeted", elementId: "missing", fillColor: "#000000" });
+    f.deps.commandId.mockImplementation(() => { throw new Error("late command metadata"); });
+    f.deps.revisionId.mockImplementation(() => { throw new Error("late revision metadata"); });
+    f.deps.createdAt.mockImplementation(() => { throw new Error("late time metadata"); });
+    await expect(flight).resolves.toBeUndefined();
+    const expected = structuredClone(source.revision.document); Object.assign(expected.elements[0]!, { fillColor: "#3fa9f5" });
+    await expectDurable(f, "revision-2", 2, expected);
+    for (const spy of [f.deps.commandId, f.deps.revisionId, f.deps.createdAt]) expect(spy).toHaveBeenCalledTimes(1);
+  });
+});

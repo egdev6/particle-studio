@@ -64,6 +64,14 @@ const shape = Type.Object(
     width: finiteNumber,
     height: finiteNumber,
     opacity: finiteNumber,
+    // Optional authored #RRGGBB literal; case is authored data, absence stays absent.
+    fillColor: Type.Optional(
+      Type.String({
+        minLength: 7,
+        maxLength: 7,
+        pattern: "^#[0-9A-Fa-f]{6}$",
+      }),
+    ),
     ...elementPresentation,
   },
   { additionalProperties: false },
