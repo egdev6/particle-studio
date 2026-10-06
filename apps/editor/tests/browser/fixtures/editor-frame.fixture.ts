@@ -79,4 +79,44 @@ async function run() {
   output("status", "passed");
 }
 
+const colorScene: SceneDocumentV1 = {
+  ...FIRST_SLICE_DOCUMENT,
+  rootIds: ["color-default", "color-authored", "color-alpha", "color-particle"],
+  tracks: [],
+  elements: [
+    { id: "color-default", type: "shape", x: 0, y: 0, width: 6, height: 4, opacity: 1 },
+    { id: "color-authored", type: "shape", x: 8, y: 0, width: 6, height: 4, opacity: 1, fillColor: "#3Fa9F5" },
+    { id: "color-alpha", type: "shape", x: 16, y: 0, width: 6, height: 4, opacity: 0.5, fillColor: "#00ff00" },
+    { id: "color-particle", type: "particle", count: 1, x: 2, y: 6, velocityX: 0, velocityY: 0, spread: 0, size: 3, opacity: 1, lifetimeSteps: 3 },
+  ],
+};
+
+function colorShapes() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 24;
+  canvas.height = 12;
+  document.body.append(canvas);
+  try {
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Canvas2D unavailable");
+    context.fillStyle = "#ffffff";
+    renderEditorFrame(context, colorScene, [], 0, { width: canvas.width, height: canvas.height });
+    const pixel = (x: number, y: number) =>
+      Array.from(context.getImageData(x, y, 1, 1).data);
+    return {
+      defaultBlack: pixel(2, 1),
+      authoredOpaque: pixel(10, 1),
+      alphaGreen: pixel(18, 1),
+      particleCallerWhite: pixel(3, 7),
+      restoredFillStyle: context.fillStyle,
+    };
+  } finally {
+    canvas.remove();
+  }
+}
+
+export type EditorFrameColors = { colorShapes: typeof colorShapes };
+declare global { interface Window { editorFrameColors: EditorFrameColors } }
+window.editorFrameColors = { colorShapes };
+
 void run().catch((error: unknown) => output("status", `failed: ${String(error)}`));

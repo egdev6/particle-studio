@@ -1,9 +1,19 @@
 import type { RenderCommand } from "@particle-studio/runtime";
 
+/**
+ * Opaque Canvas2D fill value. The renderer only writes a CSS color string and
+ * never reads it, so the readable side stays wider (a CSS string or an opaque
+ * gradient/pattern object) without naming DOM types.
+ */
+export type CanvasFillStyle = string | object;
+
 /** The minimal Canvas2D operations required by the first-slice command sink. */
 export interface Canvas2DContextLike {
   globalAlpha: number;
   font: string;
+  /** Opaque fill value: the renderer writes a CSS color string and never reads it. */
+  get fillStyle(): CanvasFillStyle;
+  set fillStyle(value: string);
   save(): void;
   restore(): void;
   beginPath(): void;
@@ -51,6 +61,7 @@ export function renderCommands(
     }
 
     if (command.kind === "draw-shape") {
+      context.fillStyle = command.fillColor ?? "#000000";
       context.fillRect(command.x, command.y, command.width, command.height);
     } else if (command.kind === "draw-text") {
       context.font = `${command.fontSize}px sans-serif`;

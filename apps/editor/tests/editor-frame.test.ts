@@ -33,6 +33,8 @@ function recordingContext() {
     set globalAlpha(value: number) { calls.push(["alpha", value]); },
     get font() { return ""; },
     set font(value: string) { calls.push(["font", value]); },
+    get fillStyle() { return "#ffffff"; },
+    set fillStyle(value: string) { calls.push(["style", value]); },
     clearRect: record("clear"), save: record("save"), restore: record("restore"),
     beginPath: record("begin"), moveTo: record("move"), lineTo: record("line"),
     stroke: record("stroke"), transform: record("transform"),
@@ -55,7 +57,7 @@ describe("editor frame", () => {
     const result = renderEditorFrame(context, scene, images, 0, { width: 20, height: 30 });
     expect(calls).toEqual([
       ["clear", 0, 0, 20, 30],
-      ["save"], ["alpha", 1], ["shape", 1, 2, 3, 4], ["restore"],
+      ["save"], ["alpha", 1], ["style", "#000000"], ["shape", 1, 2, 3, 4], ["restore"],
       ["save"], ["alpha", 1], ["image", handle, 5, 6, 7, 8], ["restore"],
     ]);
     expect(result.commands).toEqual([

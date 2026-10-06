@@ -785,4 +785,36 @@ describe("runtime first-slice evaluator", () => {
       playing: false,
     });
   });
+
+  it("transports an authored fillColor through the evaluated shape and draw-shape command", () => {
+    const document = {
+      ...FIRST_SLICE_DOCUMENT,
+      tracks: [],
+      elements: [
+        { ...FIRST_SLICE_DOCUMENT.elements[0], fillColor: "#3Fa9F5" },
+      ],
+    };
+    const evaluation = evaluateScene(document, 0);
+    const shape = evaluation.state.elements[0];
+    if (shape?.type !== "shape") throw new Error("shape fixture");
+    expect(shape).toMatchObject({ fillColor: "#3Fa9F5", opacity: 1 });
+    expect(evaluation.commands[0]).toMatchObject({
+      kind: "draw-shape",
+      fillColor: "#3Fa9F5",
+    });
+  });
+
+  it("omits fillColor from the evaluated shape and command when it is absent", () => {
+    const evaluation = evaluateScene(
+      { ...FIRST_SLICE_DOCUMENT, tracks: [] },
+      0,
+    );
+    expect(evaluation.state.elements[0]).toMatchObject({ opacity: 1 });
+    expect(evaluation.state.elements[0]).not.toHaveProperty("fillColor");
+    expect(evaluation.commands[0]).toMatchObject({
+      kind: "draw-shape",
+      sourceId: "shape-1",
+    });
+    expect(evaluation.commands[0]).not.toHaveProperty("fillColor");
+  });
 });

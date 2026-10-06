@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { evaluateScene } from "@particle-studio/runtime";
+
 class RecordingContext {
   readonly calls: string[] = [];
 
@@ -9,6 +11,14 @@ class RecordingContext {
 
   set font(value: string) {
     this.calls.push(`font(${value})`);
+  }
+
+  get fillStyle(): string {
+    return "#000000";
+  }
+
+  set fillStyle(value: string) {
+    this.calls.push(`style(${value})`);
   }
 
   save() {
@@ -61,6 +71,20 @@ class RecordingContext {
   }
 }
 
+const colorDocument = {
+  schemaVersion: 1,
+  durationUs: 1_000_000,
+  playbackRange: { startUs: 0, endUs: 1_000_000 },
+  loop: false,
+  seed: 1,
+  rootIds: ["red", "blue"],
+  elements: [
+    { id: "red", type: "shape", x: 1, y: 2, width: 3, height: 4, opacity: 1, fillColor: "#FF0000" },
+    { id: "blue", type: "shape", x: 5, y: 6, width: 7, height: 8, opacity: 1, fillColor: "#0000FF" },
+  ],
+  tracks: [],
+};
+
 describe("Canvas2D renderer package entrypoint", () => {
   it("draws an evaluated shape command through a minimal recording context", async () => {
     const { renderCommands } = await import("../src/index.js");
@@ -81,6 +105,7 @@ describe("Canvas2D renderer package entrypoint", () => {
     expect(context.calls).toEqual([
       "save",
       "alpha(0.5)",
+      "style(#000000)",
       "fillRect(16,24,120,80)",
       "restore",
     ]);
@@ -134,6 +159,7 @@ describe("Canvas2D renderer package entrypoint", () => {
       "save",
       "alpha(0.5)",
       "transform(2,0,0,3,3,46)",
+      "style(#000000)",
       "fillRect(16,24,120,80)",
       "restore",
     ]);
@@ -306,6 +332,7 @@ describe("Canvas2D renderer package entrypoint", () => {
     expect(context.calls).toEqual([
       "save",
       "alpha(0.5)",
+      "style(#000000)",
       "fillRect(16,24,120,80)",
       "restore",
       "save",
@@ -318,6 +345,67 @@ describe("Canvas2D renderer package entrypoint", () => {
       "save",
       "alpha(0.25)",
       "fillRect(5,6,7,7)",
+      "restore",
+    ]);
+  });
+
+  it("writes authored shape colors, defaults legacy shapes to black, and leaves other commands unstyled", async () => {
+    const { renderCommands } = await import("../src/index.js");
+    const context = new RecordingContext();
+
+    renderCommands(context, [
+      ...evaluateScene(colorDocument, 0).commands,
+      {
+        kind: "draw-shape",
+        sourceId: "legacy",
+        x: 9,
+        y: 9,
+        width: 1,
+        height: 1,
+        opacity: 1,
+      },
+      {
+        kind: "draw-particles",
+        sourceId: "particle-1",
+        points: [{ x: 0, y: 0 }],
+        size: 1,
+        opacity: 1,
+      },
+      {
+        kind: "draw-text",
+        sourceId: "text-1",
+        text: "T",
+        x: 0,
+        y: 0,
+        fontSize: 1,
+        opacity: 1,
+      },
+    ]);
+
+    expect(context.calls).toEqual([
+      "save",
+      "alpha(1)",
+      "style(#FF0000)",
+      "fillRect(1,2,3,4)",
+      "restore",
+      "save",
+      "alpha(1)",
+      "style(#0000FF)",
+      "fillRect(5,6,7,8)",
+      "restore",
+      "save",
+      "alpha(1)",
+      "style(#000000)",
+      "fillRect(9,9,1,1)",
+      "restore",
+      "save",
+      "alpha(1)",
+      "fillRect(0,0,1,1)",
+      "restore",
+      "save",
+      "alpha(1)",
+      "font(1px sans-serif)",
+      "fillText(T,0,0)",
       "restore",
     ]);
   });

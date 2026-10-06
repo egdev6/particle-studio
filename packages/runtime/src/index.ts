@@ -32,6 +32,7 @@ type EvaluatedShape = {
   readonly width: number;
   readonly height: number;
   readonly opacity: number;
+  readonly fillColor?: string;
   readonly transform?: AffineTransform;
 };
 
@@ -123,6 +124,7 @@ export type RenderCommand =
       readonly width: number;
       readonly height: number;
       readonly opacity: number;
+      readonly fillColor?: string;
       readonly transform?: AffineTransform;
     }
   | {
@@ -458,6 +460,9 @@ function evaluateElement(
         width: element.width,
         height: element.height,
         opacity,
+        ...(element.fillColor === undefined
+          ? {}
+          : { fillColor: element.fillColor }),
         ...transformProperty,
       }
     : {
@@ -517,6 +522,9 @@ function renderCommand(element: EvaluatedElement): RenderCommand {
               width: element.width,
               height: element.height,
               opacity: element.opacity,
+              ...(element.fillColor === undefined
+                ? {}
+                : { fillColor: element.fillColor }),
               ...transformProperty,
             }
           : {
