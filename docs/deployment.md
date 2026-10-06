@@ -136,6 +136,10 @@ The command supplies all five `PARTICLE_STUDIO_*` variables. The first four are 
   Exit 0 solo no demuestra que todas las respuestas hayan llegado al cliente.
   Véanse [main](../apps/headless-mcp/src/main.ts) y
   [request-drain](../apps/headless-mcp/src/request-drain.ts).
+  Contrato de lectura (terminología usada por la validación estática):
+  stdin must stay open until every expected response has been read.
+  Closing stdin is a shutdown signal; the server attempts to drain in-flight requests
+  for up to 5 s. A clean exit does not prove every request was answered.
 - stdout is protocol-only (newline-delimited JSON-RPC); every diagnostic goes
   to stderr.
 - The container declares no listening port and no health endpoint; there is
