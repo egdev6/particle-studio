@@ -20,6 +20,12 @@ From the repository root, after `npm ci`, run `npm run validator:prepare`. This 
 
 See [`src/index.ts`](src/index.ts) for the exact entrypoint and [`src/schemas/scene-document-v1.ts`](src/schemas/scene-document-v1.ts) for the v1 fields. Unknown schema versions are not migrated: validation rejects them, and editable JSON import reports an unsupported-version error. Canonicalization uses the `jcs-1` identifier; approval envelopes separately carry policy, hash, schema, and runtime versions. Changing those contracts requires deliberate versioning, not just regenerating bytes.
 
+## Shape fill color
+
+`shape` elements accept an optional `fillColor`: exactly seven characters, `#` plus six case-preserving hexadecimal digits such as `#3fa9f5` or `#3FA9F5`. Letter case is authored data and survives validation, editable JSON import/export, and `jcs-1` canonicalization unchanged.
+
+Absence is meaningful: validation and canonicalization never insert the field, and `opacity` remains a separate presentation value. No alpha channel is accepted, no other element variant (`line`, `group`, `particle`, `text`, `image`) accepts the field, an older v1 validator rejects enriched documents until the generated validator is regenerated, and the schema unit adds no color rendering or editor control.
+
 ## Generated validator and checks
 
 The generator is [`scripts/generate-scene-document-v1-validator.ts`](scripts/generate-scene-document-v1-validator.ts). Its output is `src/generated/scene-document-v1-validator.generated.mjs`; the adjacent `.sha256` and `src/validation/scene-document-v1-validator-contract.ts` pin expected output and contract, while the `.d.mts` supplies its declaration. Keep generated output reproducible via `npm run validator:prepare`; review fingerprint changes alongside schema, generator, or dependency changes.
