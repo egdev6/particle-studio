@@ -49,7 +49,7 @@ antes de arrancar Playwright: su fixture API usa 4175, no la entrada de producci
 | Usar acciones, selección y edición de shapes | [Editor](apps/editor/README.md) |
 | Distinguir preview real de fixtures nativos | [Browser testing](docs/browser-testing.md) |
 | Ejecutar QA reproducible con un agente Playwright | [Runbook de QA](docs/qa-agent-runbook.md) |
-| Crear, editar, persistir y exportar una escena por SDK | Cookbook del SDK (`docs/sdk-cookbook.md`, pendiente en esta cadena) |
+| Crear, editar, persistir y exportar una escena por SDK | [Cookbook del SDK](docs/sdk-cookbook.md) |
 | Conectar las cinco tools MCP sobre un workspace propio | [Headless MCP](apps/headless-mcp/README.md) |
 | Ejecutar el contenedor headless local por stdio | [Deployment](docs/deployment.md) |
 
