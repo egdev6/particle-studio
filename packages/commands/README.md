@@ -47,6 +47,14 @@ An existing root or nested shape keeps its ID while only its authored opacity ch
 
 Equal values, including zero, still append their own undo entry, possibly with empty patches, and clear redo. See the [opacity tests](tests/command-set-shape-opacity.test.ts). This primitive is in-memory only: it adds no UI, durable writes, public payload API or new agent capability.
 
+### Color de relleno de shapes
+
+El payload privado `{ type: "set-shape-fill-color", elementId, fillColor }` exige exactamente esas tres claves de cadena propias y enumerables, un ID no vacío y `#` seguido de seis dígitos hexadecimales ASCII. Conserva las mayúsculas/minúsculas; no acepta alpha, abreviaturas ni coerción. Solo admite `actorCapability: "human-ui"`: es una política del envelope, no autenticación ni una nueva capacidad de agentes.
+
+Edita únicamente el relleno de una shape existente, raíz o anidada, en un candidato validado y una entrada de revisión/historial; no asigna IDs. Los guards de documento/revisión y los errores de target mantienen su comportamiento existente. Undo restaura el documento anterior, incluida la ausencia de `fillColor`; redo reproduce el valor literal. Un valor idéntico también crea una entrada de historial y limpia redo.
+
+Véanse los [tests de color](tests/command-set-shape-fill-color.test.ts). Esta primitiva es solo en memoria: todavía no añade API durable ni controles de Inspector.
+
 ### Revision and history
 
 A successful dispatch validates the candidate document, returns `{ ok: true, revision, document }` with a detached document, and advances the revision by one. `expectedRevision` must equal the current revision; `commandId` is required but is not a deduplication key. Successful undo/redo replay validated patches and also advance the revision; a successful new dispatch clears redo. Even a valid no-op dispatch advances the revision. `fork()` copies the document, revision, and undo/redo history so later edits are independent, but shares the same ID-source callback (its external state is not rewound).

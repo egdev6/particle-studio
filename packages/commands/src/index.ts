@@ -56,6 +56,11 @@ type SetShapeOpacityPayload = {
   readonly elementId: string;
   readonly opacity: number;
 };
+type SetShapeFillColorPayload = {
+  readonly type: "set-shape-fill-color";
+  readonly elementId: string;
+  readonly fillColor: string;
+};
 type CreateElementPayload = {
   readonly type: "create-element";
   readonly element: Record<string, unknown>;
@@ -106,6 +111,7 @@ type Payload =
   | SetShapePositionPayload
   | SetShapeDimensionsPayload
   | SetShapeOpacityPayload
+  | SetShapeFillColorPayload
   | TimelinePayload
   | CreateElementPayload
   | RemoveElementPayload
@@ -232,6 +238,25 @@ function parse(command: unknown): Payload | ErrorCode {
       return "MALFORMED_COMMAND";
     }
     return { type: "set-shape-opacity", elementId, opacity };
+  }
+  if (command.payload.type === "set-shape-fill-color") {
+    const payload = command.payload;
+    const elementId = payload.elementId;
+    const fillColor = payload.fillColor;
+    const keys = ["type", "elementId", "fillColor"];
+    if (
+      command.actorCapability !== "human-ui" ||
+      !hasExactKeys(payload, keys) ||
+      !Object.keys(payload).every((key) => keys.includes(key)) ||
+      typeof elementId !== "string" ||
+      elementId.length === 0 ||
+      typeof fillColor !== "string" ||
+      fillColor.length !== 7 ||
+      !/^#[0-9A-Fa-f]{6}$/.test(fillColor)
+    ) {
+      return "MALFORMED_COMMAND";
+    }
+    return { type: "set-shape-fill-color", elementId, fillColor };
   }
   if (command.payload.type === "set-keyframe-value") {
     if (
@@ -446,6 +471,8 @@ class Session implements CommandSession {
       return this.setShapeDimensions(payload);
     if (payload.type === "set-shape-opacity")
       return this.setShapeOpacity(payload);
+    if (payload.type === "set-shape-fill-color")
+      return this.setShapeFillColor(payload);
     if (payload.type !== "set-keyframe-value") return this.timeline(payload);
 
     const track = this.document.tracks.find(
@@ -547,6 +574,32 @@ class Session implements CommandSession {
         );
         if (!shape || shape.type !== "shape") return;
         shape.opacity = payload.opacity;
+      },
+    );
+    const validation = validateSceneDocument(candidate);
+    if (!validation.ok) return error("INVALID_CANDIDATE");
+    this.document = validation.value;
+    this.#revision += 1;
+    this.#undo.push({ forward, inverse });
+    this.#redo = [];
+    return this.result();
+  }
+
+  private setShapeFillColor(payload: SetShapeFillColorPayload): Result {
+    const target = this.document.elements.find(
+      (element) => element.id === payload.elementId,
+    );
+    if (!target) return error("TARGET_NOT_FOUND");
+    if (target.type !== "shape") return error("INVALID_CANDIDATE");
+
+    const [candidate, forward, inverse] = produceWithPatches(
+      this.document,
+      (draft) => {
+        const shape = draft.elements.find(
+          (element) => element.id === payload.elementId,
+        );
+        if (!shape || shape.type !== "shape") return;
+        shape.fillColor = payload.fillColor;
       },
     );
     const validation = validateSceneDocument(candidate);
