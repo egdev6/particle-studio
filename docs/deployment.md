@@ -4,13 +4,19 @@ This guide covers the headless MCP image for local stdio-only use. It does not
 represent a committed-image smoke pass or a production release. Static editor
 publication on Netlify is a separate future surface.
 
-## 1. Static editor (future Netlify publication)
+Para bootstrap y lifecycle actuales, consulta [Headless MCP](../apps/headless-mcp/README.md)
+y el [índice del proyecto](../README.md). El editor está versionado y headless drena
+requests al cerrar. Esta guía describe el árbol actual; no acredita una publicación
+estática ni un smoke Docker ejecutado.
 
-The editor source and `netlify.toml` are not versioned in this slice, so a
-static editor deployment is not currently available from the committed tree.
-A future publication can build the editor into `apps/editor/dist` separately
-from the headless image. The editor does not talk to the container at runtime,
-and the container ships no editor code.
+## 1. Editor estático disponible; publicación Netlify pendiente
+
+La entrada [`apps/editor/index.html`](../apps/editor/index.html) y la configuración
+[`vite.config.ts`](../vite.config.ts) están versionadas. Desde la raíz, `npm run build`
+genera `apps/editor/dist`; `npm run preview` sirve ese build en `127.0.0.1:4176`.
+No hay `netlify.toml` ni publicación Netlify configurada en este árbol: poder generar
+el build no demuestra un deployment remoto. El editor no habla con el contenedor
+en runtime, y la imagen headless no incluye código del editor.
 
 ## 2. Build the headless image locally
 
@@ -122,11 +128,18 @@ The command supplies all five `PARTICLE_STUDIO_*` variables. The first four are 
 
 - Readiness: send an MCP `initialize` request on stdin; a valid response plus
   a `tools/list` exchange on stdout proves the server is ready.
-- Shutdown: stdin must stay open until every expected response has been read;
-  only then close stdin (EOF) or send SIGTERM to shut the process down.
-  Closing stdin is a shutdown signal, not a per-request end: in-flight calls
-  are not answered after it, and exit status 0 alone does not prove every
-  request was answered.
+- Cierre: mantén stdin abierto hasta leer todas las respuestas esperadas. EOF,
+  SIGINT y SIGTERM inician un cierre idempotente, no el fin de una request individual.
+  El servidor intenta responder las requests ya recibidas durante un máximo de 5 s.
+  Si el drain vence, escribe diagnóstico en stderr y sale con código no cero.
+  Antes de readiness, los bytes pendientes también provocan salida no cero.
+  Exit 0 solo no demuestra que todas las respuestas hayan llegado al cliente.
+  Véanse [main](../apps/headless-mcp/src/main.ts) y
+  [request-drain](../apps/headless-mcp/src/request-drain.ts).
+  Contrato de lectura (terminología usada por la validación estática):
+  stdin must stay open until every expected response has been read.
+  Closing stdin is a shutdown signal; the server attempts to drain in-flight requests
+  for up to 5 s. A clean exit does not prove every request was answered.
 - stdout is protocol-only (newline-delimited JSON-RPC); every diagnostic goes
   to stderr.
 - The container declares no listening port and no health endpoint; there is
