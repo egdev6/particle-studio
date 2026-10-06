@@ -5,6 +5,13 @@ dependencies installed, and Playwright's Chromium available. For a fresh browser
 cache, provision it separately with `npx playwright install chromium`; on Linux
 CI, `npx playwright install --with-deps chromium` also installs system libraries.
 
+Para el flujo de QA reproducible, el aislamiento de contexto y la plantilla de
+evidencia usa el [runbook de QA](qa-agent-runbook.md); este documento conserva el
+detalle técnico e histórico de specs. Los conteos citados más abajo son
+**descripciones históricas de cobertura**, incluidos los antiguos seis holds de
+dimensiones y los siete holds distintos de opacidad, no recibos de ejecución;
+no hay benchmark ni proyecto de performance en el árbol.
+
 ## Run the JSON editor
 
 ```sh
