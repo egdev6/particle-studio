@@ -7,6 +7,7 @@ import { mountEditorElementInspector } from "./editor-element-inspector.js";
 import { mountEditorPositionControls } from "./editor-position-controls.js";
 import { mountEditorDimensionControls } from "./editor-dimension-controls.js";
 import { mountEditorOpacityControls } from "./editor-opacity-controls.js";
+import { mountEditorFillColorControls } from "./editor-fill-color-controls.js";
 import { renderEditorFrame } from "./editor-frame.js";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#scene")!;
@@ -16,6 +17,7 @@ const browser = createBrowserEditorSession();
 let positionControls: ReturnType<typeof mountEditorPositionControls> | undefined;
 let dimensionControls: ReturnType<typeof mountEditorDimensionControls> | undefined;
 let opacityControls: ReturnType<typeof mountEditorOpacityControls> | undefined;
+let fillColorControls: ReturnType<typeof mountEditorFillColorControls> | undefined;
 const inspector = mountEditorElementInspector({
   select: document.querySelector<HTMLSelectElement>("#scene-element")!,
   details: document.querySelector<HTMLElement>("#element-details")!,
@@ -24,6 +26,7 @@ const inspector = mountEditorElementInspector({
     positionControls?.syncSelection();
     dimensionControls?.syncSelection();
     opacityControls?.syncSelection();
+    fillColorControls?.syncSelection();
   },
 });
 const currentMetadata = () => {
@@ -54,6 +57,7 @@ const activity: EditorImportActivity = {
     positionControls?.setBusy(true);
     dimensionControls?.setBusy(true);
     opacityControls?.setBusy(true);
+    fillColorControls?.setBusy(true);
     inspector.setBusy(true);
     return true;
   },
@@ -77,6 +81,9 @@ const activity: EditorImportActivity = {
     opacityControls?.setBusy(false);
     opacityControls?.setReady(ready);
     opacityControls?.syncSelection();
+    fillColorControls?.setBusy(false);
+    fillColorControls?.setReady(ready);
+    fillColorControls?.syncSelection();
   },
 };
 const renderCurrent = () => {
@@ -179,9 +186,23 @@ opacityControls = mountEditorOpacityControls({
     return message;
   },
 });
+fillColorControls = mountEditorFillColorControls({
+  form: document.querySelector<HTMLFormElement>("#shape-fill-color")!,
+  fillColor: document.querySelector<HTMLInputElement>("#shape-fill-color-value")!,
+  button: document.querySelector<HTMLButtonElement>("#apply-fill-color")!,
+  status: document.querySelector<HTMLElement>("#fill-color-status")!,
+  activity, getSelection: inspector.getSelection, getCurrent: currentMetadata,
+  setShapeFillColor: (request) => browser.setShapeFillColor(request),
+  onPublished: () => {
+    const message = renderCurrent();
+    status.textContent = message;
+    return message;
+  },
+});
 positionControls.syncSelection();
 dimensionControls.syncSelection();
 opacityControls.syncSelection();
+fillColorControls.syncSelection();
 window.addEventListener("pagehide", () => {
   controls.dispose();
   pngControls.dispose();
@@ -189,6 +210,7 @@ window.addEventListener("pagehide", () => {
   positionControls?.dispose();
   dimensionControls?.dispose();
   opacityControls?.dispose();
+  fillColorControls?.dispose();
   inspector.dispose();
   void browser.dispose();
 }, { once: true });
@@ -214,6 +236,8 @@ async function renderStartup() {
     dimensionControls?.syncSelection();
     opacityControls?.setReady(true);
     opacityControls?.syncSelection();
+    fillColorControls?.setReady(true);
+    fillColorControls?.syncSelection();
   } catch (error) {
     if (browser.disposed) return;
     const message = error instanceof Error ? error.message : "Unable to restore scene.";
@@ -226,6 +250,8 @@ async function renderStartup() {
     document.querySelector<HTMLElement>("#dimension-status")!.textContent = `Dimension editing unavailable. ${message}`;
     opacityControls?.setReady(false);
     document.querySelector<HTMLElement>("#opacity-status")!.textContent = `Opacity editing unavailable. ${message}`;
+    fillColorControls?.setReady(false);
+    document.querySelector<HTMLElement>("#fill-color-status")!.textContent = `Fill color editing unavailable. ${message}`;
   }
 }
 void renderStartup();

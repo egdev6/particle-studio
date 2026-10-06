@@ -323,8 +323,23 @@ Lee cada escalar una vez en una intención congelada antes de callbacks/awaits.
 `createBrowserEditorSession().setShapeFillColor(request)` replica la misma petición.
 Exige un color RGB de seis dígitos `#RRGGBB` (ambas cajas, sin recorte ni alfa) y
 reutiliza la publicación durable condicional y la política de actor existentes.
-La API existe en sesión y navegador, pero aún no hay control en el inspector ni
-recarga fría nativa en Chromium.
+La API existe en sesión y navegador; el control de Inspector y la recarga fría
+nativa se describen en la sección de producción siguiente.
+
+## Shape fill color en el Inspector
+
+La entrada monta `mountEditorFillColorControls` con el formulario **Shape fill color**,
+la entrada de texto `#shape-fill-color-value`, el botón **Apply fill color** y el
+estado **Fill color status**. Solo una shape publicada seleccionada habilita el
+control; otros elementos permanecen de solo lectura y la ausencia de color deja la
+entrada vacía con guía de negro por defecto. La captura usa metadatos reales de
+documento/revisión/elemento, no JSON sin enviar ni texto de opción. El color exige
+`#RRGGBB` estricto (sin alfa, recorte ni plegado) y conserva la caja autorada sin
+insertar propiedades ni normalizar. La publicación reutiliza el CAS durable y la
+actividad compartida; todo cambio de fuente exige reselección. Los casos de
+preview nativo (raíz/anidada, PNG, IndexedDB real, recarga fría) viven en
+`browser/set-shape-opacity.spec.ts`; describen cobertura, no ejecución ni
+aprobación nativa. No se añade capacidad de agente ni matriz SDK nativa aparte.
 
 Run `npm run validator:prepare` before
 `npx vitest run --project core apps/editor/tests/editor-frame.test.ts`.

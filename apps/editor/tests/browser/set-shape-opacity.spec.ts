@@ -389,3 +389,196 @@ for (const held of ["Import editable JSON", "Apply opacity"]) for (const reject 
   expect(await pane(page)).toBe(frozen); expect(await frame(page)).toEqual(priorFrame); expect(errors).toEqual([]);
   expect(await page.locator("html").getAttribute("data-late-controller")).toBeNull();
 });
+
+for (const held of actions) test(`production fill color: another origin ${held} blocks colour input and forced publication`, async ({ page }) => {
+  if (held === "Create blank scene") { await instrument(page); await open(page); }
+  else await healthy(page);
+  if (held !== "Create blank scene") await field(page, "Shape fill color").fill("#112233");
+  if (held === "Import editable JSON") await field(page, "Editable JSON").fill(JSON.stringify(current(await nativeRows(page)).document));
+  const before = await nativeRows(page); await set(page, { hold: "yes" }); await button(page, held).click();
+  await expect(page.locator("html")).toHaveAttribute("data-preparation", "pending");
+  await expect(field(page, "Shape fill color")).toBeDisabled(); await expect(button(page, "Apply fill color")).toBeDisabled();
+  await set(page, { watch: "yes", effects: "{}" });
+  await button(page, "Apply fill color").dispatchEvent("click"); await page.locator("#shape-fill-color").dispatchEvent("submit");
+  await set(page, { watch: "no" }); expect(await page.locator("html").getAttribute("data-effects")).toBe("{}");
+  expect(await nativeRows(page)).toEqual(before);
+  await set(page, { settle: "yes" }); await expect(page.locator("html")).toHaveAttribute("data-preparation", "settled");
+  await expect(page.locator("#shape-fill-color")).toHaveAttribute("aria-busy", "false");
+  await expect(select(page)).toHaveValue(""); await expect(button(page, "Apply fill color")).toBeDisabled();
+  const after = current(await nativeRows(page));
+  for (const element of after.document.elements) if (element.type === "shape") expect(element).not.toHaveProperty("fillColor");
+});
+async function colours(page: Page, nested: boolean) {
+  return page.locator("#scene").evaluate((canvas: HTMLCanvasElement, nested) =>
+    [[nested ? 50 : 20, nested ? 40 : 30], [181, 45]].map(([x, y]) =>
+      Array.from(canvas.getContext("2d")!.getImageData(x!, y!, 1, 1).data)), nested);
+}
+async function colourPublication(page: Page, before: Rows, fillColor: string) {
+  const after = await nativeRows(page); const prior = current(before); const next = current(after);
+  const expected = structuredClone(prior.document); const shape = expected.elements.find((element) => element.id === "shape")!;
+  if (shape.type !== "shape") throw new Error("Expected an authored shape");
+  shape.fillColor = fillColor; const independent = revision(expected, next.revisionId, prior.sequence + 1);
+  expect(next).toEqual(independent); expect(next.canonicalBytes).toEqual(independent.canonicalBytes);
+  expect(createHash("sha256").update(Uint8Array.from(independent.canonicalBytes)).digest("hex"))
+    .toBe(createHash("sha256").update(Uint8Array.from(next.canonicalBytes)).digest("hex"));
+  expect(ordered(after)).toEqual(ordered({ ...before, revisions: [...before.revisions as unknown[], next],
+    pointers: [{ documentId: BROWSER_DOCUMENT, saved: (before.pointers as { saved: unknown }[])[0]!.saved,
+      draft: { kind: "draft", documentId: BROWSER_DOCUMENT, revisionId: next.revisionId, sequence: next.sequence } }] }));
+  return after;
+}
+for (const nested of [false, true]) test(`production fill color: authored cases stay exact, fall back to black and survive cold reload (nested=${nested})`, async ({ page }) => {
+  await healthy(page, nested);
+  await expect(field(page, "Shape fill color")).toHaveCount(1);
+  await expect(button(page, "Apply fill color")).toHaveCount(1);
+  await expect(status(page, "Fill color")).toHaveCount(1);
+  const initial = current(await nativeRows(page));
+  expect(initial.document.elements.find((element) => element.id === "shape")!).not.toHaveProperty("fillColor");
+  await expect(field(page, "Shape fill color")).toHaveValue("");
+  await expect(status(page, "Fill color")).toContainText("Absent colors render black (#000000) by fallback");
+  let before = await savedPrior(page); const original = current(before).document;
+  const rendered = [[63, 169, 245, 255], [0, 0, 0, 255]];
+  for (const fillColor of ["#3FA9F5", "#3Fa9F5", "#3fa9f5", "#3fa9f5"]) {
+    await select(page).selectOption("shape"); await field(page, "Shape fill color").fill(fillColor);
+    const retained = (await handles(page)).filter((record) => record.closes === 0); expect(retained).toHaveLength(1);
+    const allocated = (await ids(page)).length; const prior = before;
+    await button(page, "Apply fill color").click(); await expect(status(page, "Fill color")).toContainText("complete");
+    expect((await ids(page)).length).toBe(allocated + 2);
+    before = await colourPublication(page, before, fillColor);
+    const previous = current(prior).document.elements[1]!;
+    if (previous.type === "shape" && previous.fillColor === fillColor) expect(current(before).canonicalBytes).toEqual(current(prior).canonicalBytes);
+    expect(current(before).document.elements.map((element) => element.id)).toEqual(original.elements.map((element) => element.id));
+    expect(current(before).document.tracks).toEqual(original.tracks);
+    await expect(select(page)).toHaveValue(""); await expect(field(page, "Shape fill color")).toBeDisabled(); await expect(button(page, "Apply fill color")).toBeDisabled();
+    await expect(field(page, "Shape fill color")).toHaveValue("");
+    for (const kind of edits) { await expect(button(page, action(kind))).toBeDisabled(); await expect(status(page, kind)).toContainText("Select a published shape"); }
+    for (const record of await handles(page)) { const kept = retained.some((item) => item.id === record.id); expect(record.closes).toBe(kept ? 0 : 1); expect(record.useful).toBe(kept); }
+    expect((await handles(page)).length).toBeGreaterThan(1); expect(await colours(page, nested)).toEqual(rendered);
+    await page.reload(); await expect(page.locator("#status")).toContainText("restored draft");
+    expect(await nativeRows(page)).toEqual(before); expect(await colours(page, nested)).toEqual(rendered);
+    await select(page).selectOption("shape"); await expect(field(page, "Shape fill color")).toHaveValue(fillColor);
+    expect(JSON.parse((await details(page).textContent())!)).toEqual(current(before).document.elements[1]);
+  }
+});
+test("production fill color: unsent JSON and a relabeled option never retarget the published source", async ({ page }) => {
+  await healthy(page); await expect(field(page, "Shape fill color")).toHaveCount(1); await savedPrior(page);
+  await select(page).selectOption("shape"); await field(page, "Shape fill color").fill("#112233");
+  await field(page, "Editable JSON").fill(JSON.stringify(scene(false, 0.9)));
+  await select(page).evaluate((element: HTMLSelectElement) => { element.value = "root"; element.selectedOptions[0]!.textContent = "shape fillColor=#ffffff"; });
+  const before = await nativeRows(page); await button(page, "Apply fill color").click(); await expect(status(page, "Fill color")).toContainText("complete");
+  const after = await colourPublication(page, before, "#112233");
+  await expect(select(page)).toHaveValue(""); await expect(field(page, "Shape fill color")).toBeDisabled(); await expect(field(page, "Shape fill color")).toHaveValue("");
+  await expect(button(page, "Apply fill color")).toBeDisabled();
+  for (const kind of edits) await expect(status(page, kind)).toContainText("Select a published shape");
+  expect(current(after).document.elements[1]).toEqual({ ...current(before).document.elements[1], fillColor: "#112233" });
+});
+test("production fill color: invalid matrix leaves native rows, frame and effects untouched and only shapes are editable", async ({ page }) => {
+  await healthy(page); await expect(field(page, "Shape fill color")).toHaveCount(1);
+  const before = await nativeRows(page); const priorFrame = await frame(page); const detail = await details(page).textContent();
+  await select(page).selectOption("shape"); await set(page, { watch: "yes", effects: "{}" });
+  for (const invalid of ["#3a9", "#3fa9f5ff", "rebeccapurple", "rgb(63,169,245)", " #3fa9f5", "#3fa9f5 ", "", "garbage"]) {
+    await field(page, "Shape fill color").fill(invalid); await page.locator("#shape-fill-color").dispatchEvent("submit");
+    await expect(status(page, "Fill color")).toContainText("seven-character"); await expect(field(page, "Shape fill color")).toHaveValue(invalid);
+    await expect(select(page)).toHaveValue("shape");
+  }
+  await set(page, { watch: "no" }); expect(await page.locator("html").getAttribute("data-effects")).toBe("{}");
+  expect(await nativeRows(page)).toEqual(before); expect(await frame(page)).toEqual(priorFrame); expect(await details(page).textContent()).toBe(detail);
+  for (const element of current(before).document.elements) {
+    await select(page).selectOption(element.id);
+    await expect(field(page, "Shape fill color")).toBeEnabled({ enabled: element.type === "shape" });
+    await expect(button(page, "Apply fill color")).toBeEnabled({ enabled: element.type === "shape" });
+    if (element.type !== "shape") {
+      await expect(status(page, "Fill color")).toContainText("Other elements remain read-only");
+      await page.locator("#shape-fill-color").dispatchEvent("submit"); await button(page, "Apply fill color").dispatchEvent("click");
+    }
+  }
+  await select(page).selectOption(""); await expect(field(page, "Shape fill color")).toBeDisabled(); await expect(button(page, "Apply fill color")).toBeDisabled();
+  await expect(status(page, "Fill color")).toContainText("Select a published shape");
+  await page.locator("#shape-fill-color").dispatchEvent("submit"); await button(page, "Apply fill color").dispatchEvent("click");
+  expect(await nativeRows(page)).toEqual(before); expect(await frame(page)).toEqual(priorFrame);
+});
+test("production fill color: a held real preparation keeps all eight origins blocked until release publishes once", async ({ page }) => {
+  await healthy(page); await expect(field(page, "Shape fill color")).toHaveCount(1); await select(page).selectOption("shape");
+  const before = await nativeRows(page); const detail = await details(page).textContent(); await field(page, "Shape fill color").fill("#3fa9f5");
+  await set(page, { hold: "yes" });
+  await button(page, "Apply fill color").evaluate((target) => {
+    (target as HTMLButtonElement).click();
+    for (const other of document.querySelectorAll("button")) other.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    for (const form of document.forms) form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    for (const input of document.querySelectorAll("input,textarea")) input.dispatchEvent(new Event("input", { bubbles: true }));
+    const select = document.querySelector<HTMLSelectElement>("#scene-element")!; select.value = "root"; select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await expect(page.locator("html")).toHaveAttribute("data-preparation", "pending");
+  await set(page, { watch: "yes", effects: "{}" });
+  for (const name of [...actions, "Apply fill color"]) { await expect(button(page, name)).toBeDisabled(); await button(page, name).dispatchEvent("click"); }
+  for (const form of [...forms, "#shape-fill-color"]) await page.locator(form).dispatchEvent("submit");
+  await set(page, { watch: "no" }); expect(await page.locator("html").getAttribute("data-effects")).toBe("{}");
+  expect(await details(page).textContent()).toBe(detail); expect(await nativeRows(page)).toEqual(before);
+  await set(page, { settle: "yes" }); await expect(status(page, "Fill color")).toContainText("complete");
+  await colourPublication(page, before, "#3fa9f5"); await expect(button(page, "Apply fill color")).toBeDisabled();
+  await expect(status(page, "Fill color")).not.toContainText("Loading local scene");
+  for (const kind of edits) await expect(status(page, kind)).toContainText("Select a published shape");
+});
+for (const during of [false, true]) test(`production fill color: genuine external CAS winner before/during retains no colour candidate (during=${during})`, async ({ page, context }) => {
+  await healthy(page); await expect(field(page, "Shape fill color")).toHaveCount(1); const before = await savedPrior(page);
+  await select(page).selectOption("shape"); await field(page, "Shape fill color").fill("#3fa9f5");
+  const priorFrame = await frame(page); const detail = await details(page).textContent(); const allocated = (await ids(page)).length;
+  const retained = (await handles(page)).filter((record) => record.closes === 0);
+  const other = await context.newPage(); await other.goto("/"); await expect(other.locator("#status")).toContainText("restored draft");
+  if (during) { await set(page, { hold: "yes" }); await button(page, "Apply fill color").click(); await expect(page.locator("html")).toHaveAttribute("data-preparation", "pending"); }
+  const candidate = during ? (await ids(page)).at(-1)! : null; if (during) expect((await ids(page)).length).toBe(allocated + 2);
+  const winner = structuredClone(current(before).document); winner.seed = 123; await publish(other, winner); const winningRows = await nativeRows(other);
+  expect((winningRows.pointers as { saved: unknown }[])[0]!.saved).toEqual((before.pointers as { saved: unknown }[])[0]!.saved);
+  for (const row of before.revisions as unknown[]) expect(winningRows.revisions).toContainEqual(row);
+  expect(winningRows.assets).toEqual(before.assets);
+  const winning = current(winningRows); expect(winning).toEqual(revision(winner, winning.revisionId, current(before).sequence + 1));
+  expect(ordered(winningRows)).toEqual(ordered({ ...before, revisions: [...before.revisions as unknown[], winning],
+    pointers: [{ documentId: BROWSER_DOCUMENT, saved: (before.pointers as { saved: unknown }[])[0]!.saved,
+      draft: { kind: "draft", documentId: BROWSER_DOCUMENT, revisionId: winning.revisionId, sequence: winning.sequence } }] }));
+  if (during) await set(page, { settle: "yes" }); else await button(page, "Apply fill color").click();
+  await expect(status(page, "Fill color")).toContainText("refresh"); const captured = candidate ?? (await ids(page)).at(-1)!;
+  expect((await ids(page)).length).toBe(allocated + 2); expect((winningRows.revisions as { revisionId: string }[]).some((row) => row.revisionId === captured)).toBe(false);
+  expect(await nativeRows(page)).toEqual(winningRows); expect(await frame(page)).toEqual(priorFrame); expect(await details(page).textContent()).toBe(detail);
+  for (const record of retained) expect((await handles(page)).find((item) => item.id === record.id)).toEqual(record);
+  await page.reload(); await expect(page.locator("#status")).toContainText("restored draft");
+  expect(await nativeRows(page)).toEqual(winningRows); await select(page).selectOption("shape");
+  await expect(field(page, "Shape fill color")).toHaveValue(""); expect(await colours(page, false)).toEqual([[0, 0, 0, 255], [0, 0, 0, 255]]);
+  expect(JSON.parse((await details(page).textContent())!)).toEqual(winner.elements[1]); await other.close();
+});
+test("production fill color: committed render warning preserves the native publication and reload renders it", async ({ page }) => {
+  await healthy(page); await field(page, "Shape fill color").fill("#00ff00");
+  const before = await nativeRows(page); const priorFrame = await frame(page);
+  await set(page, { renderFault: "yes" }); await button(page, "Apply fill color").click();
+  await expect(status(page, "Fill color")).toContainText("published, but rendering failed");
+  const after = await colourPublication(page, before, "#00ff00");
+  expect(await frame(page)).toEqual(priorFrame); await expect(select(page)).toHaveValue("");
+  await expect(status(page, "Fill color")).not.toContainText("rolled back");
+  await set(page, { renderFault: "" }); await page.reload();
+  await expect(page.locator("#status")).toContainText("restored draft");
+  expect(await nativeRows(page)).toEqual(after);
+  expect(await colours(page, false)).toEqual([[0, 255, 0, 255], [0, 0, 0, 255]]);
+  await select(page).selectOption("shape"); await expect(field(page, "Shape fill color")).toHaveValue("#00ff00");
+});
+for (const reject of [false, true]) test(`production fill color: pagehide owns settlement and closes every bitmap once (reject=${reject})`, async ({ page }) => {
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await healthy(page); await field(page, "Shape fill color").fill("#3Fa9F5");
+  const before = await nativeRows(page); const priorFrame = await frame(page);
+  const retained = (await handles(page)).filter((record) => record.closes === 0); expect(retained).toHaveLength(1);
+  await set(page, { hold: "yes", fault: reject ? "preparation" : "" }); await button(page, "Apply fill color").click();
+  await expect(page.locator("html")).toHaveAttribute("data-preparation", "pending");
+  const value = await field(page, "Shape fill color").inputValue(); const feedback = await status(page, "Fill color").textContent();
+  await field(page, "Shape fill color").evaluate((input: HTMLInputElement) => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!;
+    Object.defineProperty(input, "value", { configurable: true, get: () => descriptor.get!.call(input),
+      set: () => { document.documentElement.dataset.lateFill = "yes"; throw new Error("Fill controller active after pagehide"); } });
+  });
+  await set(page, { disposalGuard: "yes" }); await page.evaluate(() => { window.dispatchEvent(new Event("pagehide")); window.dispatchEvent(new Event("pagehide")); });
+  expect(await page.locator("html").getAttribute("data-late-fill")).toBeNull();
+  expect(await page.locator("html").getAttribute("data-late-controller")).toBeNull();
+  await expect(field(page, "Shape fill color")).toHaveValue(value); expect(await status(page, "Fill color").textContent()).toBe(feedback);
+  const frozen = await pane(page); for (const record of retained) expect((await handles(page)).find((item) => item.id === record.id)).toEqual(record);
+  await set(page, { settle: "yes" }); await expect.poll(async () => (await handles(page)).every((record) => record.closes === 1 && !record.useful)).toBe(true);
+  if (reject) expect(await nativeRows(page)).toEqual(before); else await colourPublication(page, before, "#3Fa9F5");
+  for (const name of [...actions, "Apply fill color"]) await button(page, name).dispatchEvent("click");
+  for (const form of [...forms, "#shape-fill-color"]) await page.locator(form).dispatchEvent("submit"); await select(page).dispatchEvent("change");
+  expect(await pane(page)).toBe(frozen); expect(await frame(page)).toEqual(priorFrame); expect(errors).toEqual([]);
+});
