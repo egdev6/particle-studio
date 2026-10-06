@@ -45,7 +45,7 @@ antes de arrancar Playwright: su fixture API usa 4175, no la entrada de producci
 | --- | --- |
 | Entender responsabilidades y contratos | [Mapa del proyecto](docs/overview.md) |
 | Saber qué existe en dominio, SDK, UI y QA | [Matriz de fronteras](docs/boundary-matrix.md) |
-| Operar el editor y encontrar rutas no UI | Manual funcional (`docs/functional-guide.md`, pendiente en esta cadena) |
+| Operar el editor y encontrar rutas no UI | [Manual funcional](docs/functional-guide.md) |
 | Usar acciones, selección y edición de shapes | [Editor](apps/editor/README.md) |
 | Distinguir preview real de fixtures nativos | [Browser testing](docs/browser-testing.md) |
 | Ejecutar QA reproducible con un agente Playwright | Runbook de QA (`docs/qa-agent-runbook.md`, pendiente en esta cadena) |
