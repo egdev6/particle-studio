@@ -728,3 +728,95 @@ it.each([false, true])("real opacity disposal awaits bitmap preparation and clos
   for (const handle of f.handles) expect(handle.close).toHaveBeenCalledTimes(1);
   await expect(browser.setShapeOpacity(input)).rejects.toThrow("UNAVAILABLE");
 });
+
+import { describe } from "vitest";
+
+describe("browser shape fill color API", () => {
+  type FillColorRequest = { readonly documentId: string; readonly revisionId: string; readonly elementId: string; readonly fillColor: string };
+  type FillColorBrowser = ReturnType<typeof createBrowserEditorSession>;
+
+  it("fill color captures four getters once, frozen before SDK callbacks and owned-lane reentry", async () => {
+    const pending = deferred<void>(); const release = vi.fn(); const clear = vi.fn();
+    const revision = { documentId: "browser-document", revisionId: "source", sequence: 1, document: FIRST_SLICE_DOCUMENT };
+    const previous = { revision, workspace: { images: [] }, release }; const workspace = { current: previous };
+    const input = { documentId: revision.documentId, revisionId: revision.revisionId, elementId: "shape-1", fillColor: "#3fa9f5" };
+    const expected = { ...input }; const reads: string[] = []; const request = { ...input };
+    for (const key of Object.keys(input) as (keyof typeof input)[]) Object.defineProperty(request, key, { get() { reads.push(key); return input[key]; } });
+    const setShapeFillColor = vi.fn(async (captured: FillColorRequest) => {
+      expect(captured).toEqual(expected); expect(Object.isFrozen(captured)).toBe(true); expect(reads).toEqual(Object.keys(input));
+      Object.assign(input, { documentId: "foreign", revisionId: "late", elementId: "root", fillColor: "#000000" });
+      await expect(browser.setShapeFillColor(input)).rejects.toThrow("UNAVAILABLE");
+      await pending.promise; expect(captured).toEqual(expected);
+      workspace.current = { ...previous, revision: { ...revision, revisionId: "actual", sequence: 2 } };
+    });
+    mocks.persistence.mockReturnValue({ readPointers: async () => ({ draft: revision, saved: null }) });
+    mocks.session.mockReturnValue({ workspace, cache: { clear }, reload: async () => previous, setShapeFillColor });
+    const browser = createBrowserEditorSession() as FillColorBrowser; await browser.start();
+    expect(typeof browser.setShapeFillColor).toBe("function"); const flight = browser.setShapeFillColor(request);
+    pending.resolve(); const next = await flight;
+    expect(next).toBe(browser.current); expect(next?.revision).toBe(workspace.current.revision);
+    expect(reads).toEqual(Object.keys(input)); expect(setShapeFillColor).toHaveBeenCalledTimes(1);
+    await browser.dispose(); expect(release).toHaveBeenCalledTimes(1); expect(clear).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["not-ready", "busy", "disposed"])("fill color unavailable %s rejects before caller getters or effects", async (state) => {
+    const f = await pngFixture(); const browser = f.browser as FillColorBrowser; let busy: Promise<unknown> | undefined;
+    if (state === "disposed") { await browser.start(); await browser.dispose(); }
+    else if (state === "busy") { await browser.start(); await browser.importJson(f.json); busy = browser.importPng(f.file, f.rectangle); }
+    expect(typeof browser.setShapeFillColor).toBe("function");
+    const get = vi.fn(() => { throw new Error("caller getter"); });
+    const input = Object.defineProperty({ documentId: "browser-document", revisionId: "source", elementId: "shape-1", fillColor: "#3fa9f5" }, "fillColor", { get });
+    const ids = vi.spyOn(crypto, "randomUUID"); ids.mockClear();
+    for (const spy of [f.readPointers, f.readAsset, f.writeAsset, f.writeRevision]) spy.mockClear();
+    await expect(browser.setShapeFillColor(input)).rejects.toThrow("EDITOR_SHAPE_FILL_COLOR_UNAVAILABLE");
+    expect(get).not.toHaveBeenCalled(); expect(ids).not.toHaveBeenCalled();
+    for (const spy of [f.readPointers, f.readAsset, f.writeAsset, f.writeRevision]) expect(spy).not.toHaveBeenCalled();
+    if (busy) { f.gate.resolve(new Uint8Array([1, 2, 3]).buffer); await busy; }
+    await browser.dispose();
+  });
+
+  it("fill color cannot replace an owned PNG flight started by a request getter", async () => {
+    const f = await pngFixture(); const browser = f.browser;
+    await browser.start(); await browser.importJson(f.json);
+    const source = browser.current!; let pngFlight: Promise<BrowserCurrent | null> | undefined;
+    const request = { documentId: source.revision.documentId, revisionId: source.revision.revisionId,
+      elementId: "shape-1", fillColor: "#3Fa9F5" };
+    Object.defineProperty(request, "documentId", { get() {
+      pngFlight = browser.importPng(f.file, f.rectangle);
+      return source.revision.documentId;
+    } });
+    try {
+      await expect(browser.setShapeFillColor(request)).rejects.toThrow("EDITOR_SHAPE_FILL_COLOR_UNAVAILABLE");
+      expect(browser.current).toBe(source);
+      let disposed = false; const disposal = browser.dispose().then(() => { disposed = true; });
+      await Promise.resolve(); await Promise.resolve();
+      expect(disposed).toBe(false);
+      f.gate.resolve(new Uint8Array([1, 2, 3]).buffer);
+      await pngFlight; await disposal;
+      expect(disposed).toBe(true);
+    } finally {
+      f.gate.resolve(new Uint8Array([1, 2, 3]).buffer);
+      await pngFlight?.catch(() => undefined);
+      await browser.dispose();
+    }
+  });
+
+  it("real fill color publishes durably through fake-indexeddb and leaves the owner on preparation failure", async () => {
+    const f = await pngFixture(); const browser = f.browser as FillColorBrowser;
+    await browser.start(); await browser.importJson(f.json);
+    expect(typeof browser.setShapeFillColor).toBe("function"); const source = browser.current!;
+    const input = { documentId: source.revision.documentId, revisionId: source.revision.revisionId, elementId: "shape-1", fillColor: "#3Fa9F5" };
+    const next = await browser.setShapeFillColor(input);
+    expect(next).toBe(browser.current); expect(next?.revision.sequence).toBe(2);
+    const expected = structuredClone(source.revision.document);
+    Object.assign(expected.elements.find((element) => element.id === "shape-1")!, { fillColor: "#3Fa9F5" });
+    expect(next?.revision.document).toEqual(expected);
+    const pointers = await f.persistence.readPointers("browser-document");
+    expect(await f.persistence.readRevision("browser-document", pointers.draft!.revisionId)).toEqual(next!.revision);
+    const held = browser.current!; f.readPointers.mockRejectedValueOnce(new Error("preparation failed"));
+    await expect(browser.setShapeFillColor({ ...input, revisionId: held.revision.revisionId })).rejects.toThrow();
+    expect(browser.current).toBe(held);
+    expect(await f.persistence.readPointers("browser-document")).toEqual(pointers);
+    await browser.dispose();
+  });
+});

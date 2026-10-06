@@ -315,6 +315,17 @@ The inspector spec extends existing startup-disabled checks without removing old
 assertions. These describe coverage, not passing execution or native approval.
 Issue #122 remains open; final authorized integration/review is separate.
 
+## Shape fill color SDK (issue #141)
+
+`EditorSession.setShapeFillColor(request): Promise<void>` acepta los cuatro campos
+readonly de `ShapeFillColorRequest`: documentId, revisionId, elementId y fillColor.
+Lee cada escalar una vez en una intención congelada antes de callbacks/awaits.
+`createBrowserEditorSession().setShapeFillColor(request)` replica la misma petición.
+Exige un color RGB de seis dígitos `#RRGGBB` (ambas cajas, sin recorte ni alfa) y
+reutiliza la publicación durable condicional y la política de actor existentes.
+La API existe en sesión y navegador, pero aún no hay control en el inspector ni
+recarga fría nativa en Chromium.
+
 Run `npm run validator:prepare` before
 `npx vitest run --project core apps/editor/tests/editor-frame.test.ts`.
 Use `npm run build`, `npm run dev`, and `npm run preview` for the JSON editor.
