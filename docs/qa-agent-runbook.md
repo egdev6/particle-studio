@@ -3,7 +3,9 @@
 Guía ejecutable para un agente de QA que verifique el proyecto **implementado hoy**.
 No es un recibo de ejecución: los comandos y resultados esperados son instrucciones.
 Durante la autoría de este runbook **no** se ejecutaron tests, servidores ni builds
-(estado `NOT_RUN`). El agente que lo siga produce la evidencia real.
+(estado `NOT_RUN`); esa condición histórica se conserva. La ejecución QA es otra cosa:
+cuando el agente la corra, graba reporte/trace/screens/video en directorios owned como
+artefactos y no deriva un `PASS` de lo que este documento describe.
 
 Ruta: [inicio](../README.md) · [manual funcional](functional-guide.md) ·
 [matriz de capacidades](boundary-matrix.md) · [headless](../apps/headless-mcp/README.md).
@@ -70,7 +72,7 @@ holds forzados ni cierre de bitmap una vez.
 
 | Clase | Superficie | Puede probar | No prueba por sí sola |
 | --- | --- | --- | --- |
-| Producción | Preview 4176, entrada real | Siete acciones + Inspector con bytes/IDB reales | Biblioteca completa |
+| Producción | Preview 4176, entrada real | Nueve acciones + Inspector con bytes/IDB reales | Biblioteca completa |
 | Fixture API | 4175, exports `window` | Facade/API con SHA/PNG/IDB nativos | Que los controles reales existan |
 | UI jsdom | Vitest `ui` | Inputs, selección, activity, listeners | Entrada build, bytes nativos |
 | SDK Node | Vitest `core` | Workflows, guards, invariantes | Native CAS/bitmap |
@@ -88,12 +90,17 @@ Selección por labels exactos. Preflight: bootstrap (sección 8), `build`+`previ
 | 3 | **Position X**, **Position Y**, **Apply position** | 20 / 100 | Se publica par; selección se limpia |
 | 4 | **Dimension width**, **Dimension height**, **Apply dimensions** | 24 / 14 | Par publicado; **Dimension status** |
 | 5 | **Shape opacity**, **Apply opacity** | 0.5 | Negro alpha≈128 en píxel (24,104) |
-| 6 | **PNG file** + PNG x/y/width/height | File PNG, 180 / 40 / 8 / 8 | Imagen black alpha255 en (181,45); sin ocluir |
-| 7 | **Scene element** + **Published element JSON** | ninguna | Metadata read-only del elemento elegido |
+| 6 | **Shape fill color**, **Apply fill color** | `#FF0000` | Rojo `[255,0,0,128]` con la opacidad previa; **Fill color status** |
+| 7 | **PNG file** + PNG x/y/width/height | File PNG, 180 / 40 / 8 / 8 | Imagen black alpha255 en (181,45); sin ocluir |
+| 8 | **Shape visible**, **Apply visibility** | sin marcar | Bandera `false` authored; la shape no se dibuja y el PNG permanece; **Visibility status** |
+| 9 | **Scene element** + **Published element JSON** | ninguna | Metadata read-only del elemento elegido |
 
-Tras **cada** publicación (pasos 3–6), **reselecciona** en **Scene element** antes de
+Tras **cada** publicación (pasos 3–8), **reselecciona** en **Scene element** antes de
 editar: toda publicación nueva avanza revisión aunque el valor sea igual. Los edits
-son sólo para **shape**; group e image quedan read-only y no hay picking por coordenadas.
+son sólo para **shape**; group y las demás variantes no-shape quedan read-only y no
+hay picking por coordenadas. La visibilidad se prefija marcada (`true`) sin insertar
+nada hasta **Apply visibility**; aplicar el mismo booleano vuelve a publicar, y una
+marca local `true` no anula un group ancestro oculto.
 
 ### Escena JSON manual (root y nested)
 
@@ -116,11 +123,13 @@ authored == evaluado.
 
 ### Exclusión, busy y warnings
 
-Con un paso en vuelo, las siete acciones y la selección quedan excluidas. Un rechazo
-de guard (vacío/no finito/fuera de rango; >0 en dimensiones, 0..1 en opacidad) exige
-corrección y activación explícita: no hay clamp, retry ni rebase. Un mensaje
-**published, but rendering failed** significa commit durable, **no** rollback ni rechazo.
-No hay UI de undo/redo, timeline, autosave, color/rotation, export/download ni vídeo.
+Con un paso en vuelo, las nueve acciones y la selección quedan excluidas. Un rechazo
+de guard (vacío/no finito/fuera de rango; >0 en dimensiones, 0..1 en opacidad;
+`#RRGGBB` ASCII exacto sin recorte, normalización ni coerción en color; booleano
+estricto en visibilidad) exige corrección y activación explícita: no hay clamp, retry
+ni rebase. Un mensaje **published, but rendering failed** significa commit durable,
+**no** rollback ni rechazo. No hay UI de undo/redo, timeline, autosave, rotation,
+export/download ni vídeo.
 
 ### Prueba nativa directa y casos negativos
 
@@ -137,6 +146,8 @@ screenshots ni hooks privados. Producción `chromium-preview` (4176):
 | Position | [set-shape-position.spec.ts](../apps/editor/tests/browser/set-shape-position.spec.ts) |
 | Dimensions (17 casos, seis holds) | [set-shape-dimensions.spec.ts](../apps/editor/tests/browser/set-shape-dimensions.spec.ts) |
 | Opacity (24 casos, siete holds) | [set-shape-opacity.spec.ts](../apps/editor/tests/browser/set-shape-opacity.spec.ts) |
+| Fill color (17 casos, mismo spec de opacidad) | [set-shape-opacity.spec.ts](../apps/editor/tests/browser/set-shape-opacity.spec.ts) |
+| Visibility (21 casos) | [set-shape-visibility.spec.ts](../apps/editor/tests/browser/set-shape-visibility.spec.ts) |
 
 No hay `create-blank-scene.spec.ts`: la creación blank se prueba dentro de
 `durable-import.spec.ts`. API de fixture no productiva `chromium` (4175):
@@ -146,8 +157,10 @@ No hay `create-blank-scene.spec.ts`: la creación blank se prueba dentro de
 [set-shape-opacity-api.spec.ts](../apps/editor/tests/browser/set-shape-opacity-api.spec.ts).
 
 Son expectativas del flujo manual, no coordenadas exactas del fixture nativo. Los
-conteos son históricos: no inventes un recibo fresco
-1514 ni un screenshot como sustituto de estas pruebas instrumentadas.
+conteos son históricos y de este árbol, no universales: la base pública de navegador
+es 197 casos (35 del fixture API `chromium` y 162 de `chromium-preview`), medida antes
+de esta sesión y no un recibo fresco; un screenshot no sustituye estas pruebas
+instrumentadas.
 
 ### Receta portable ejecutable (API @playwright/test)
 
@@ -212,9 +225,18 @@ try {
 
   await page.locator("#shape-opacity-value").fill("0.5");
   await page.getByRole("button", { name: "Apply opacity" }).click();
+  await waitText("#opacity-status", "complete");
   await waitCleared();
   await page.locator("#scene-element").selectOption(shapeId);
   assert.deepEqual(await pixel(24, 104), [0, 0, 0, 128]);
+
+  await page.locator("#shape-fill-color-value").fill("#FF0000");
+  await page.getByRole("button", { name: "Apply fill color" }).click();
+  await waitText("#fill-color-status", "complete");
+  await waitCleared();
+  await page.locator("#scene-element").selectOption(shapeId);
+  assert.deepEqual(await pixel(24, 104), [255, 0, 0, 128]);
+  assert.equal(JSON.parse(await page.locator("#element-details").textContent()).fillColor, "#FF0000");
 
   await page.locator("#png-file").setInputFiles({ name: "one.png", mimeType: "image/png", buffer: onePixelPng });
   await page.locator("#png-x").fill("180");
@@ -224,6 +246,34 @@ try {
   await page.getByRole("button", { name: "Import PNG" }).click();
   await waitText("#png-status", "PNG import complete");
   assert.deepEqual(await pixel(181, 45), [0, 0, 0, 255]);
+
+  await page.locator("#scene-element").selectOption(shapeId);
+  await page.locator("#shape-visible").uncheck();
+  await page.getByRole("button", { name: "Apply visibility" }).click();
+  await waitText("#visibility-status", "complete");
+  await waitCleared();
+  await page.locator("#scene-element").selectOption(shapeId);
+  assert.equal(JSON.parse(await page.locator("#element-details").textContent()).visible, false);
+  assert.equal((await pixel(24, 104))[3], 0);
+  assert.deepEqual(await pixel(181, 45), [0, 0, 0, 255]);
+  await page.reload();
+  await waitText("#status", "restored");
+  await page.locator("#scene-element").selectOption(shapeId);
+  assert.equal(await page.locator("#shape-visible").isChecked(), false);
+  assert.equal((await pixel(24, 104))[3], 0);
+  assert.deepEqual(await pixel(181, 45), [0, 0, 0, 255]);
+  await page.locator("#shape-visible").check();
+  await page.getByRole("button", { name: "Apply visibility" }).click();
+  await waitText("#visibility-status", "complete");
+  await waitCleared();
+  await page.locator("#scene-element").selectOption(shapeId);
+  assert.deepEqual(await pixel(24, 104), [255, 0, 0, 128]);
+  const revisionBefore = await page.locator("#element-status").textContent();
+  await page.getByRole("button", { name: "Apply visibility" }).click();
+  await waitText("#visibility-status", "complete");
+  await waitCleared();
+  await page.locator("#scene-element").selectOption(shapeId);
+  assert.notEqual(await page.locator("#element-status").textContent(), revisionBefore);
 
   await page.locator("#editable-json").fill(manualJson);
   await page.getByRole("button", { name: "Import editable JSON" }).click();
@@ -235,6 +285,7 @@ try {
 
   await page.locator("#shape-opacity-value").fill("0");
   await page.getByRole("button", { name: "Apply opacity" }).click();
+  await waitText("#opacity-status", "complete");
   await waitCleared();
   await page.locator("#scene-element").selectOption("shape-nested");
   assert.equal((await pixel(44, 40))[3], 0);
@@ -251,6 +302,24 @@ try {
 }
 ```
 
+### Batería visual integral (Playwright, ejecutable)
+
+El recorrido progresivo encadena las nueve acciones y el Inspector mediante UI pública
+en **chromium-preview** (4176). El spec registrado es
+`apps/editor/tests/browser/qa-production-journey.spec.ts`: seis casos, root/nested en
+viewport desktop 1440×1000 y estrecho 390×900, ancestro oculto e inputs inválidos/no-shape.
+Los inválidos son texto/números/JSON representables en la UI; un booleano inválido no
+puede introducirse por el checkbox nativo. Comando sobre la config raíz:
+
+```sh
+npx playwright test apps/editor/tests/browser/qa-production-journey.spec.ts --project=chromium-preview --workers=1 --retries=0 --headed --trace=on
+```
+
+El reporte HTML, trace, screenshots y vídeo van a directorios owned elegidos en runtime
+por el parent; no fijes rutas absolutas ni privadas. Los viewports desktop/mobile sólo
+comprueban que la UI es alcanzable: no son una auditoría WCAG ni un `PASS` de
+accesibilidad.
+
 ## 7. Complementos de familia pública (Vitest y CLI)
 
 Comandos exactos por capa; sustituye rutas por las de `--project` correspondiente.
@@ -258,7 +327,7 @@ Comandos exactos por capa; sustituye rutas por las de `--project` correspondient
 | Familia | Comando enfocado | Esperado | Fuente |
 | --- | --- | --- | --- |
 | Schema/canónico/validator | `npx vitest run --project core packages/scene-document/tests` | Validación, JCS, contrato/generación del validador | [tests](../packages/scene-document/tests) |
-| Commands | `npx vitest run --project core packages/commands/tests` | Actor, historial y 3 primitivas shape | [tests](../packages/commands/tests) |
+| Commands | `npx vitest run --project core packages/commands/tests` | Actor, historial y 5 primitivas shape | [tests](../packages/commands/tests) |
 | Runtime | `npx vitest run --project core packages/runtime/tests` | `evaluateScene`/`createTimelineTransport` | [tests](../packages/runtime/tests) |
 | Renderer | `npx vitest run --project integration packages/renderer-canvas2d/tests` | Contrato de comandos Canvas2D | [tests](../packages/renderer-canvas2d/tests) |
 | Editor SDK/facade | `npx vitest run --project core apps/editor/tests` | Session/facade, reload, IDs | [tests](../apps/editor/tests) |
@@ -272,7 +341,8 @@ Comandos exactos por capa; sustituye rutas por las de `--project` correspondient
 
 Export: ESM/web component/IIFE/self-contained HTML en **memoria**; sin descarga UI ni
 vídeo. HTML limita a 10,485,760 bytes de assets únicos embebidos. WebMCP/browser-agent:
-tres comandos shape estrechos exigen human-ui. Headless: 5 tools por stdio
+cinco comandos shape estrechos exigen human-ui (política de envelope, no autenticación).
+Headless: 5 tools por stdio
 (`stdout` protocolo, `stderr` diagnósticos), EOF/SIGTERM drenan hasta 5 s; exit 0 solo
 no prueba respuestas completas; **no** hay HTTP/health/puerto. El envelope de dispatch
 tiene exactamente 5 keys: `commandSchemaVersion`, `commandId`, `documentId`,
