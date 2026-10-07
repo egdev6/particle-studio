@@ -341,6 +341,17 @@ preview nativo (raíz/anidada, PNG, IndexedDB real, recarga fría) viven en
 `browser/set-shape-opacity.spec.ts`; describen cobertura, no ejecución ni
 aprobación nativa. No se añade capacidad de agente ni matriz SDK nativa aparte.
 
+## Shape visibility SDK (issue #143)
+
+`EditorSession.setShapeVisibility(request): Promise<void>` acepta los cuatro campos
+readonly de `ShapeVisibilityRequest`: documentId, revisionId, elementId y visible.
+Lee cada escalar una vez en una intención congelada antes de callbacks/awaits; exige
+`visible` booleano (false válido, sin coerción) y una shape publicada existente, y
+reutiliza la publicación durable condicional y la política human-UI existentes.
+`createBrowserEditorSession().setShapeVisibility(request)` replica la petición por el
+carril propio compartido. Es API de sesión y navegador en memoria: no añade control
+de Inspector, UI, píxeles nativos ni recarga fría. Issue #143 sigue abierta.
+
 Run `npm run validator:prepare` before
 `npx vitest run --project core apps/editor/tests/editor-frame.test.ts`.
 Use `npm run build`, `npm run dev`, and `npm run preview` for the JSON editor.
