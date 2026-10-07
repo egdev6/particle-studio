@@ -55,6 +55,14 @@ Edita únicamente el relleno de una shape existente, raíz o anidada, en un cand
 
 Véanse los [tests de color](tests/command-set-shape-fill-color.test.ts). Esta primitiva es solo en memoria: todavía no añade API durable ni controles de Inspector.
 
+### Visibilidad de shapes
+
+El payload privado `{ type: "set-shape-visibility", elementId, visible }` exige exactamente `type`, `elementId` y `visible` como claves propias y enumerables; `visible` debe ser booleano y el ID una cadena no vacía sin recortar. Solo admite `actorCapability: "human-ui"`: es una política del envelope, no autenticación.
+
+Edita únicamente `visible` de una shape existente, raíz o anidada, conservando ID, transform, relleno, assets y tracks; no asigna IDs. Targets ausentes devuelven `TARGET_NOT_FOUND`; otros tipos (grupo, línea, partícula, texto, imagen) devuelven `INVALID_CANDIDATE`.
+
+Undo elimina un `visible` recién insertado o restaura el anterior; un valor booleano igual también crea una entrada de historial y limpia redo. Véanse los [tests de visibilidad](tests/command-set-shape-visibility.test.ts). Es solo en memoria: no añade SDK, UI ni píxeles nativos.
+
 ### Revision and history
 
 A successful dispatch validates the candidate document, returns `{ ok: true, revision, document }` with a detached document, and advances the revision by one. `expectedRevision` must equal the current revision; `commandId` is required but is not a deduplication key. Successful undo/redo replay validated patches and also advance the revision; a successful new dispatch clears redo. Even a valid no-op dispatch advances the revision. `fork()` copies the document, revision, and undo/redo history so later edits are independent, but shares the same ID-source callback (its external state is not rewound).

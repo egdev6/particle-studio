@@ -61,6 +61,11 @@ type SetShapeFillColorPayload = {
   readonly elementId: string;
   readonly fillColor: string;
 };
+type SetShapeVisibilityPayload = {
+  readonly type: "set-shape-visibility";
+  readonly elementId: string;
+  readonly visible: boolean;
+};
 type CreateElementPayload = {
   readonly type: "create-element";
   readonly element: Record<string, unknown>;
@@ -112,6 +117,7 @@ type Payload =
   | SetShapeDimensionsPayload
   | SetShapeOpacityPayload
   | SetShapeFillColorPayload
+  | SetShapeVisibilityPayload
   | TimelinePayload
   | CreateElementPayload
   | RemoveElementPayload
@@ -257,6 +263,22 @@ function parse(command: unknown): Payload | ErrorCode {
       return "MALFORMED_COMMAND";
     }
     return { type: "set-shape-fill-color", elementId, fillColor };
+  }
+  if (command.payload.type === "set-shape-visibility") {
+    const payload = command.payload;
+    const { elementId, visible } = payload;
+    const keys = ["type", "elementId", "visible"];
+    if (
+      command.actorCapability !== "human-ui" ||
+      !hasExactKeys(payload, keys) ||
+      !Object.keys(payload).every((key) => keys.includes(key)) ||
+      typeof elementId !== "string" ||
+      elementId.length === 0 ||
+      typeof visible !== "boolean"
+    ) {
+      return "MALFORMED_COMMAND";
+    }
+    return { type: "set-shape-visibility", elementId, visible };
   }
   if (command.payload.type === "set-keyframe-value") {
     if (
@@ -473,6 +495,8 @@ class Session implements CommandSession {
       return this.setShapeOpacity(payload);
     if (payload.type === "set-shape-fill-color")
       return this.setShapeFillColor(payload);
+    if (payload.type === "set-shape-visibility")
+      return this.setShapeVisibility(payload);
     if (payload.type !== "set-keyframe-value") return this.timeline(payload);
 
     const track = this.document.tracks.find(
@@ -574,6 +598,32 @@ class Session implements CommandSession {
         );
         if (!shape || shape.type !== "shape") return;
         shape.opacity = payload.opacity;
+      },
+    );
+    const validation = validateSceneDocument(candidate);
+    if (!validation.ok) return error("INVALID_CANDIDATE");
+    this.document = validation.value;
+    this.#revision += 1;
+    this.#undo.push({ forward, inverse });
+    this.#redo = [];
+    return this.result();
+  }
+
+  private setShapeVisibility(payload: SetShapeVisibilityPayload): Result {
+    const target = this.document.elements.find(
+      (element) => element.id === payload.elementId,
+    );
+    if (!target) return error("TARGET_NOT_FOUND");
+    if (target.type !== "shape") return error("INVALID_CANDIDATE");
+
+    const [candidate, forward, inverse] = produceWithPatches(
+      this.document,
+      (draft) => {
+        const shape = draft.elements.find(
+          (element) => element.id === payload.elementId,
+        );
+        if (!shape || shape.type !== "shape") return;
+        shape.visible = payload.visible;
       },
     );
     const validation = validateSceneDocument(candidate);
