@@ -1,7 +1,7 @@
 # Manual funcional de Particle Studio
 
 Usa esta guía para operar el editor local y encontrar las interfaces de biblioteca
-y headless del proyecto. **Los botones actuales son siete acciones y un Inspector**;
+y headless del proyecto. **Los botones actuales son nueve acciones y un Inspector**;
 no representan todas las capacidades del dominio. Los ejemplos describen el
 comportamiento implementado, no pruebas ejecutadas ni una aprobación de QA.
 
@@ -41,9 +41,11 @@ bloqueados; no convierte saved/sample en draft ni habilita creación de reemplaz
 | **Apply position** | Shape seleccionada; Position X/Y | Ambos ejes authored/local publicados juntos |
 | **Apply dimensions** | Shape seleccionada; Dimension width/height | Ambas dimensiones authored/local publicadas juntas |
 | **Apply opacity** | Shape seleccionada; Shape opacity | Sólo la opacidad base authored publicada |
+| **Apply fill color** | Shape seleccionada; Shape fill color | Color `#RRGGBB` authored publicado, sin normalizar el caso |
+| **Apply visibility** | Shape seleccionada; Shape visible | Bandera authored `true`/`false` publicada |
 
 Cada activación captura su entrada una vez. Todas comparten activity frontend y
-lane owned backend: mientras trabajan se excluyen las otras seis, selección e inputs,
+lane owned backend: mientras trabajan se excluyen las otras ocho, selección e inputs,
 incluso ante eventos forzados o llamadas directas. No hay una cola UI de segundos edits.
 
 ### Crear sin JSON
@@ -149,10 +151,14 @@ otra fuente ni para adoptar recursos. Los guards SDK vuelven a comprobar la fuen
 | **Position X**, **Position Y** / **Apply position** | Par no vacío y finito; negativos/fracciones válidos | -4.5 / 30 |
 | **Dimension width**, **Dimension height** / **Apply dimensions** | Par no vacío, finito y estrictamente positivo | 20.5 / 12 |
 | **Shape opacity** / **Apply opacity** | No vacía, finita en [0,1]; 0/-0/fracciones/1 válidos | 0.5 |
+| **Shape fill color** / **Apply fill color** | `#RRGGBB` ASCII exacto de siete caracteres, sin alfa ni shorthand; el caso se preserva | `#3Fa9F5` |
+| **Shape visible** / **Apply visibility** | Booleano estricto `true`/`false`; no coerciona texto ni número | sin marcar (`false`) |
 
-Los controles usan inputs `type=number`: el navegador puede convertir una cadena
-inválida en valor vacío. El controlador rechaza vacío, no lo toma como cero;
-y comprueba finitud/rango, sin depender sólo de validación HTML nativa.
+Los controles numéricos usan inputs `type=number`: el navegador puede convertir una
+cadena inválida en valor vacío. El controlador rechaza vacío, no lo toma como cero;
+y comprueba finitud/rango, sin depender sólo de validación HTML nativa. **Shape fill
+color** usa un input de texto y **Shape visible** un checkbox: exigen `#RRGGBB` exacto
+y booleano estricto, sin coerción, recorte, clamp ni migración de schema.
 
 El prefill es authored genuino: dimensiones heredadas cero/negativas y opacidad
 -0.25/2 siguen importables y visibles. Sólo el nuevo edit exige el rango estrecho;
@@ -164,18 +170,28 @@ iguales o quedó el mismo element ID: revisión/secuencia/pointer avanzan y la s
 se limpia. Un rechazo same-source retiene selección e input escrito. No hay retarget,
 retry ni rebase automático para una selección stale o un ganador de otra pestaña.
 
+La visibilidad es authored por shape: sin bandera escrita la shape se dibuja
+(`visible` ausente equivale a `true`). Una marca local `true` no anula un group
+ancestro oculto: la shape sigue sin pintarse, pero **Apply visibility** es una
+edición legítima que publica igual. Una shape oculta sigue siendo inspeccionable y
+seleccionable; marcar y aplicar el mismo valor visible vuelve a publicar
+revisión/secuencia/pointer nuevos.
+
 Opacidad cero de una shape no borra ni libera las imágenes de la escena. Tracks
 preservados pueden sobrescribir su valor base en playback start: éxito no garantiza
 píxeles distintos. El ejemplo anterior no tiene tracks; una escena importada puede tenerlos.
-Consulta **Position status**, **Dimension status** y **Opacity status** por separado.
-Los tres controladores conservan su propio resultado al terminar el trabajo compartido;
-un edit externo refresca guidance a la fuente current real.
+Consulta **Position status**, **Dimension status**, **Opacity status**, **Fill color status**
+y **Visibility status** por separado. Los cinco controladores conservan su propio
+resultado al terminar el trabajo compartido; un edit externo refresca guidance a la
+fuente current real.
 
 ## 4. Resolver errores sin perder autoridad de fuente
 
 | Síntoma | Acción del usuario | No asumir |
 | --- | --- | --- |
 | Inputs vacíos/no finitos/fuera de rango | Corregir ambos campos del par o la opacidad y activar explícitamente | Que vacío equivalga a 0 o exista clamp |
+| Color inválido (shorthand, alfa, nombre, espacios) | Corregir a `#RRGGBB` ASCII exacto y activar explícitamente | Que se recorte, normalice o acepte shorthand |
+| Shape dentro de un ancestor oculto | Revisar la visibilidad del group en el JSON | Que la marca local `true` dibuje a través del ancestro |
 | Selección vacía tras éxito | Reseleccionar en **Scene element** | Que stable ID permita reutilizar el token anterior |
 | Edit/PNG bloqueado en sample | Crear o importar tras startup sano | Que sample sea un draft |
 | Import JSON/PNG falla | Revisar documento, archivo, placement y assets locales | Que todos los stores hicieron rollback |
@@ -185,7 +201,7 @@ un edit externo refresca guidance a la fuente current real.
 | Éxito opacity pero frame igual | Revisar tracks/playback start y la shape elegida | Que authored sea el valor evaluado |
 
 El status primario del canvas es distinto de los estados nombrados de Inspector,
-PNG, rectangle y los tres edits. Un error de dibujo posterior a commit no deshace
+PNG, rectangle y los cinco edits. Un error de dibujo posterior a commit no deshace
 publicación; el Inspector se refresca desde actual current aunque no se pudo pintar.
 No uses fallos de render como señal para reenviar un comando sin revisar la fuente.
 
@@ -195,7 +211,7 @@ Una recarga explícita restaura el draft durable verificado y sus PNG, pinta en
 playback start y borra selección. Texto/input aún no publicado no es una versión
 persistida; no cuentes con recuperarlo. Guardar draft local no es aprobar ni exportar.
 
-En `pagehide`, los tres edit controllers se disponen antes del null del Inspector.
+En `pagehide`, los cinco edit controllers se disponen antes del null del Inspector.
 Se suprimen DOM/status/frame tardíos; el owner espera trabajo resuelto/rechazado y
 cierra cada bitmap owned una vez, incluidos duplicados legítimos de prehidratación.
 No debes cerrar handles prestados, cancelar la cola, vaciar cache o cerrar/eliminar
@@ -222,15 +238,16 @@ SceneDocument/SDK. No son APIs `window` ni endpoints del fixture. Sigue cada con
 Export tiene ESM/web component/IIFE/HTML, no PNG/WebM/vídeo ni descarga UI. No se
 puede sustituir aprobación branded por JSON plano ni omitir providers/asset reader.
 Autosave/approvals existen en IDB, pero no están conectados como controles editor.
-Tampoco hay undo/redo, color/rotation, timeline/keyframes o playback controls en UI.
+Tampoco hay undo/redo, rotation, timeline/keyframes o playback controls en UI.
 
 La [facade browser](../apps/editor/src/browser-editor-session.ts) expone `start`,
-`createScene`, `importJson`, `importPng`, `addRectangle`, los tres `setShape*`,
+`createScene`, `importJson`, `importPng`, `addRectangle`, los cinco `setShape*`,
 `current`, `disposed` y `dispose`. Las solicitudes shape llevan documentId,
-revisionId, elementId y el valor/par capturado de la fuente actual. Returned current
-es rendering data prestada; el consumidor dibuja y suprime efectos tardíos sin
-adquirir release/cache authority. No crees una segunda facade para eludir el lane
-ni confundas esa interfaz de módulo con una API global instalada por la página.
+revisionId, elementId y el valor/par capturado de la fuente actual. La capability
+`human-ui` de esas familias estrechas es política de envelope, no autenticación.
+Returned current es rendering data prestada; el consumidor dibuja y suprime efectos
+tardíos sin adquirir release/cache authority. No crees una segunda facade para eludir
+el lane ni confundas esa interfaz de módulo con una API global instalada por la página.
 
 ## Siguiente paso
 

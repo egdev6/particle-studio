@@ -87,7 +87,7 @@ fields; stale selection or competing-tab publication never triggers a rebase.
 Equal coordinates publish an ordinary new revision/sequence/pointer and clear
 selection. Explicitly reselect after success; same-source rejection retains input.
 Named **Position status** reports committed-but-render-failed warnings truthfully,
-while inspection refreshes from actual current. All seven actions share the lane.
+while inspection refreshes from actual current. All nine actions share the lane.
 All three edit controllers dispose before inspection; existing owners await settlement.
 
 ## Edit selected shape dimensions and verify production UI
@@ -171,7 +171,7 @@ opacity at playback start; successful publication need not change rendered pixel
 Nonshapes stay inspectable/read-only. New document/revision identity clears selection,
 even for stable IDs/equal edits; explicitly reselect. Same-source rejection retains
 selection and typed input. Named **Opacity status** preserves the primary unnamed
-canvas status. All seven actual actions exclude forced/same-turn buttons, forms,
+canvas status. All nine actual actions exclude forced/same-turn buttons, forms,
 selection and input events through both shared activity and the backend owned lane.
 All three controllers preserve their own results/render warnings through BEGIN/END;
 both other edit controllers refresh guidance from actual current after source changes.
@@ -203,13 +203,49 @@ These are coverage descriptions, not GREEN, native approval or remote CI receipt
 Existing servers, both-project registration and develop/main CI filters are unchanged;
 issue #122 closure and final authorized integration/review remain separate.
 
+## Color de relleno: edición y pruebas de producción
+
+Elige una shape publicada, escribe **Shape fill color** como `#RRGGBB` ASCII exacto
+(siete caracteres, sin alfa ni shorthand) y pulsa **Apply fill color**. El valor
+authored se publica con su caso preservado; una ausencia dibuja negro por fallback.
+La cadena exacta se rechaza sin recortes ni normalización: shorthand, alfa, nombres,
+`rgb(...)` y espacios no publican. Los casos de producción de fill color viven en
+`set-shape-opacity.spec.ts`; los 29 casos del controlador jsdom están en
+`editor-fill-color-controls.test.tsx`. Estas descripciones de cobertura no son un
+recibo GREEN ni una aprobación nativa.
+
+## Visibilidad: edición y pruebas de producción
+
+Elige una shape publicada, marca o desmarca **Shape visible** y pulsa **Apply
+visibility**. La bandera es booleana estricta `true`/`false`: no coerciona texto ni
+números. Ausente equivale a visible; una marca local `true` no dibuja a través de un
+ancestro oculto, aunque la edición sigue siendo legítima y publica igual. Una shape
+oculta permanece inspeccionable y seleccionable; aplicar el mismo valor visible vuelve
+a publicar.
+
+Ejecuta `npx playwright test apps/editor/tests/browser/set-shape-visibility.spec.ts --project=chromium-preview`.
+Sus 21 casos nativos cubren la base de 5 (root/nested, ancestro oculto, sólo shapes
+editables y muestra sin autoridad) más 9 orígenes retenidos, 1 toggle sin Apply, 1
+feedback propio en settlement cruzado, 2 de CAS externo, 1 de fallo de render tras
+commit y 2 de `pagehide`. El origen **Create blank scene** es el único caso legítimo
+sin current: su autoridad de visibilidad es vacua y no se fabrica una shape activa.
+Al vivir sobre PNG real e IDB nativa, la evidencia compara filas canónicas completas,
+configuración, historial, pointer saved, bytes de assets, canvas nativo y píxeles
+ocultos `false` tras la misma publicación recargada, nunca una importación JSON falsa.
+`pagehide` retiene el vuelo propio: en éxito el SDK puede publicar durable después de
+disponer el DOM y cierra cada bitmap current/candidato/verify una vez; en rechazo no
+hay publicación. Se suprimen DOM/frame/status tardíos sin cancelar la cola. Estos
+conteos describen cobertura, no el resultado de una ejecución ni una aprobación.
+Comprueba el resultado con los comandos públicos de la sección siguiente. Los 65
+casos del controlador jsdom están en `editor-visibility-controls.test.tsx`.
+
 ## Verify browser behavior
 
 ```sh
 npm run test:browser
 npx vitest run --project core apps/editor/tests/browser-png-platform.test.ts apps/editor/tests/browser-editor-session.test.ts
 npm run validator:prepare
-npx vitest run --project ui apps/editor/tests/editor-element-inspector.test.tsx apps/editor/tests/editor-position-controls.test.tsx apps/editor/tests/editor-dimension-controls.test.tsx apps/editor/tests/editor-opacity-controls.test.tsx
+npx vitest run --project ui apps/editor/tests/editor-element-inspector.test.tsx apps/editor/tests/editor-position-controls.test.tsx apps/editor/tests/editor-dimension-controls.test.tsx apps/editor/tests/editor-opacity-controls.test.tsx apps/editor/tests/editor-fill-color-controls.test.tsx apps/editor/tests/editor-visibility-controls.test.tsx
 npx tsc -p apps/editor/tsconfig.json --noEmit --pretty false
 ```
 

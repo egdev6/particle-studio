@@ -25,7 +25,7 @@ Las pruebas pueden instrumentar APIs nativas para holds/fallos y observar candid
 Eso no convierte hooks de fixture ni `window` de test en servicios productivos.
 Una comparación independiente de bytes/SHA en un test tampoco es un hook de producción.
 
-## Entrada editor: siete acciones reales
+## Entrada editor: nueve acciones reales
 
 Todas están conectadas a la [entrada real](../apps/editor/src/editor-canvas-entry.ts)
 y la [facade browser](../apps/editor/src/browser-editor-session.ts). Comparten activity
@@ -42,9 +42,11 @@ para animación. Selección/inputs no eluden exclusión durante trabajo pending.
 | **Apply position** | `setShapePosition`; selección source-bound de shape root/nested | [set-shape-position](../apps/editor/tests/browser/set-shape-position.spec.ts) |
 | **Apply dimensions** | `setShapeDimensions`; selección source-bound de shape root/nested | [set-shape-dimensions](../apps/editor/tests/browser/set-shape-dimensions.spec.ts) |
 | **Apply opacity** | `setShapeOpacity`; selección source-bound de shape root/nested | [set-shape-opacity](../apps/editor/tests/browser/set-shape-opacity.spec.ts) |
+| **Apply fill color** | `setShapeFillColor`; selección source-bound de shape root/nested | [set-shape-opacity](../apps/editor/tests/browser/set-shape-opacity.spec.ts) |
+| **Apply visibility** | `setShapeVisibility`; selección source-bound de shape root/nested | [set-shape-visibility](../apps/editor/tests/browser/set-shape-visibility.spec.ts) |
 
 **Scene element** y **Published element JSON** añaden inspección read-only, no una
-octava acción durable. [element-inspector](../apps/editor/tests/browser/element-inspector.spec.ts)
+décima acción durable. [element-inspector](../apps/editor/tests/browser/element-inspector.spec.ts)
 comprueba metadata, identidad y ausencia de efectos propios en storage/píxeles/bitmaps.
 Los [tests de controles](../apps/editor/tests) separan esa prueba de las UI jsdom.
 Los detalles de labels/payloads y códigos están en el [README editor](../apps/editor/README.md).
@@ -57,11 +59,13 @@ Los detalles de labels/payloads y códigos están en el [README editor](../apps/
 | Position X/Y | Par finito atómico; negativos/fracciones válidos | Authored/local bajo grupos, no world ni tracks evaluados |
 | Dimension width/height | Par finito estrictamente positivo; fracciones válidas | Tamaños heredados cero/negativos siguen importables |
 | Shape opacity | Finita [0,1], incluye 0/-0, fracciones y 1 | Heredada -0.25/2 permanece sin clamp ni migración |
+| Shape fill color | `#RRGGBB` ASCII exacto de siete caracteres; caso preservado | Ausente dibuja negro por fallback; sin clamp ni migración de schema |
+| Shape visible | Booleano estricto `true`/`false`; sin coerción | Ausente equivale a visible; un group ancestro oculto sigue aplicando |
 | Inspector | Las seis variantes, en orden documental | Metadata authored; no JSON sin enviar, handles ni valores animados |
 
 Inspector entrega token documentId/revisionId/elementId; es identidad, no permiso
 de acción. Los guards SDK comprueban fuente viva, tipo y valores antes de efectos.
-Los tres edits preservan ID y campos ajenos, jerarquía, tracks, configuración,
+Los cinco edits preservan ID y campos ajenos, jerarquía, tracks, configuración,
 historial saved y referencias PNG. No asignan otro element ID ni retargetean.
 Tracks preservados pueden sobrescribir opacidad base en playback start: éxito no
 promete un cambio visible en todos los píxeles.
@@ -69,10 +73,11 @@ promete un cambio visible en todos los píxeles.
 Valores iguales también publican revisión/secuencia/pointer nuevos. Toda fuente
 nueva limpia selección aunque el ID permanezca: hay que reseleccionar explícitamente.
 Un rechazo same-source conserva selección e input escrito. No se hace retry/rebase.
-Cada uno de los tres controladores conserva su propio éxito/rechazo/advertencia de
+Cada uno de los cinco controladores conserva su propio éxito/rechazo/advertencia de
 render a través de BEGIN/END; publicación ajena refresca guidance del actual current.
-**Position status**, **Dimension status** y **Opacity status** son independientes del
-status primario del canvas. Commit seguido de fallo de render no significa rollback.
+**Position status**, **Dimension status**, **Opacity status**, **Fill color status** y
+**Visibility status** son independientes del status primario del canvas. Commit seguido
+de fallo de render no significa rollback.
 
 ### Startup, concurrencia y cierre
 
@@ -84,7 +89,7 @@ status primario del canvas. Commit seguido de fallo de render no significa rollb
   retarget, retry ni recarga implícita. Guards y native CAS son fronteras diferentes.
 - Fallo PNG puede dejar bytes inmutables escritos antes de rechazo; preservar
   documento/pointer/frame no promete rollback global de assets ni garbage collection.
-- `pagehide` dispone los tres edit controllers **antes** de notificar null al Inspector;
+- `pagehide` dispone los cinco edit controllers **antes** de notificar null al Inspector;
   suprime DOM/status/frame tardíos. Owner espera settlements resueltos/rechazados y
   cierra cada bitmap owned una vez, incluidos duplicados legítimos prehidratados.
   No cancela cola workspace, cierra/elimina DB ni usa hacks de liberación de cache.
@@ -99,7 +104,7 @@ status primario del canvas. Commit seguido de fallo de render no significa rollb
 | Transporte seek/play/pause/advance y loop | No playback controls | Core: [runtime](../packages/runtime/README.md) |
 | Canvas2D de shape/line/text/particle/image | Dibujo de escena importada/restaurada | Integración [renderer tests](../packages/renderer-canvas2d/tests), preview startup |
 | Commands e historial revisionado, undo/redo/fork | Sólo acciones estrechas conectadas | Core: [commands/tests](../packages/commands/tests) |
-| Workspace durable, imports y bridge source-bound | Las siete acciones | Core/fake IDB y UI: [editor/tests](../apps/editor/tests); preview separado |
+| Workspace durable, imports y bridge source-bound | Las nueve acciones | Core/fake IDB y UI: [editor/tests](../apps/editor/tests); preview separado |
 | Revisiones/pointers y recovery offers | Reload draft, no recovery UI | Core: [persistence/tests](../packages/persistence/tests) |
 | IDB assets, autosaves, approvals y transacciones | Assets/revisiones conectados; autosave/aprobación no | Fake IDB [adapter tests](../packages/persistence-indexeddb/tests); preview para rutas conectadas |
 | FS confinado, revisiones/pointers/assets | No binding browser | Core [FS tests](../packages/persistence-fs/tests); headless integración |
@@ -115,16 +120,21 @@ consulta su [README](../packages/commands/README.md) y tests para los envelopes 
 
 - Elementos: `create-element`, `remove-element`, `replace-element`.
 - Jerarquía: `group-elements`, `ungroup-element`, `reparent-element`.
-- Shape estrecha: `set-shape-position`, `set-shape-dimensions`, `set-shape-opacity`.
+- Shape estrecha: `set-shape-position`, `set-shape-dimensions`, `set-shape-opacity`,
+  `set-shape-fill-color`, `set-shape-visibility`.
 - Valor por identidad: `set-keyframe-value`.
 - Timeline: `create-track`, `remove-track`, `create-keyframe`, `change-keyframe`,
   `move-keyframe`, `remove-keyframe` (propiedades `opacity` y `text.text`).
 
-Las tres operaciones estrechas requieren `human-ui`; browser/headless devuelven
+Las cinco operaciones estrechas requieren `human-ui`; browser/headless devuelven
 `MALFORMED_COMMAND`. Las familias anteriores conservan sus branches de actor;
 no se deduce un rechazo global a agents. `actorCapability` es política del envelope,
 no token de autenticación. Targets/IDs/candidatos/revisión se validan por dominio.
-Undo/redo/fork son métodos de sesión; tenerlos no implica botones editor.
+Undo/redo/fork son métodos de sesión; tenerlos no implica botones editor. Los cinco
+setters existen como método privado de la sesión concreta y como exports públicos de
+`EditorSession`/facade browser (`ShapeVisibilityRequest`, `setShapeVisibility` y pares);
+el `CommandSession` público no expone nuevos setters ni amplía capability de agents.
+La edición de visibilidad utiliza el campo y la evaluación de visibilidad ya existentes.
 
 ## Export y agentes: interfaces, no promesas de producto
 
@@ -158,7 +168,7 @@ límites a IDB ni confundas ese storage con el packaging HTML de 10 MiB.
 [playwright.config.ts](../playwright.config.ts) fija Chromium, un worker, cero
 retries y `reuseExistingServer: false`. Proyecto `chromium` usa fixture 4175 para
 platform/frame y APIs dimensions/opacity; `chromium-preview` usa build+preview 4176
-para ocho specs de producción. Dev 4173 es otra ruta, no prueba de build equivalente.
+para nueve specs de producción. Dev 4173 es otra ruta, no prueba de build equivalente.
 El comando enfocado previsto es `npx playwright test <path> --project=chromium-preview`;
 aun enfocado, la config inicia ambos servidores. No reutilices un harness vivo.
 
@@ -168,7 +178,7 @@ Cache/huella del validador y oráculos independientes de tests no sustituyen nat
 history/pointers/full bytes ni cierres por bitmap. No hay benchmark ni proyecto de
 performance en el árbol; no se declara una salida de performance verde.
 
-**No expuesto hoy:** undo/redo UI, color/rotation UI, timeline/keyframe UI, autosave UI,
+**No expuesto hoy:** undo/redo UI, rotation UI, timeline/keyframe UI, autosave UI,
 export/download UI, playback controls, canvas picking/drag/highlights y recovery UI.
 **No implementado como salida actual:** PNG/WebM/vídeo o export CLI documentada.
 **No configurado en el árbol:** Netlify. La entrada editor sí está versionada;
