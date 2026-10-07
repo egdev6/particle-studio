@@ -451,3 +451,85 @@ test("production visibility: own settlement retains its feedback while the cross
   await select(page).selectOption("shape"); await expect(checkbox(page)).not.toBeChecked();
   expect(current(after).document.elements.find((element) => element.id === "shape")).toHaveProperty("visible", false);
 });
+
+// --- Case C: a genuine external CAS winner before/during the own apply leaves no durable candidate ---
+for (const during of [false, true]) test(`production visibility: genuine external CAS winner before/during retains no visibility candidate (during=${during})`, async ({ page, context }) => {
+  await instrument(page); await healthy(page); const before = await savedPrior(page); await select(page).selectOption("shape");
+  await checkbox(page).uncheck(); const priorFrame = await frame(page); const detail = (await details(page).textContent())!;
+  const allocated = (await uuids(page)).length;
+  const retained = (await handles(page)).filter((record) => record.closes === 0); expect(retained).toHaveLength(1);
+  const other = await context.newPage(); await other.goto("/"); await expect(other.locator("#status")).toContainText("restored draft");
+  if (during) { await set(page, { hold: "yes" }); await button(page, "Apply visibility").click(); await expect(page.locator("html")).toHaveAttribute("data-preparation", "pending"); }
+  const candidate = during ? (await uuids(page)).at(-1)! : null; if (during) expect((await uuids(page)).length).toBe(allocated + 2);
+  // Rival publishes the whole same document plus the external race marker on an independent page.
+  const winner = structuredClone(current(before).document); winner.seed = 123; await publish(other, winner); const winningRows = await nativeRows(other);
+  expect((winningRows.pointers as { saved: unknown }[])[0]!.saved).toEqual((before.pointers as { saved: unknown }[])[0]!.saved);
+  for (const row of before.revisions as unknown[]) expect(winningRows.revisions).toContainEqual(row);
+  expect(winningRows.assets).toEqual(before.assets);
+  const winning = current(winningRows); expect(winning).toEqual(revision(winner, winning.revisionId, current(before).sequence + 1));
+  expect(ordered(winningRows)).toEqual(ordered({ ...before, revisions: [...before.revisions as unknown[], winning],
+    pointers: [{ documentId: BROWSER_DOCUMENT, saved: (before.pointers as { saved: unknown }[])[0]!.saved,
+      draft: { kind: "draft", documentId: BROWSER_DOCUMENT, revisionId: winning.revisionId, sequence: winning.sequence } }] }));
+  if (during) await set(page, { settle: "yes" }); else await button(page, "Apply visibility").click();
+  await expect(status(page)).toContainText("refresh"); const captured = candidate ?? (await uuids(page)).at(-1)!;
+  expect((await uuids(page)).length).toBe(allocated + 2); expect((winningRows.revisions as { revisionId: string }[]).some((row) => row.revisionId === captured)).toBe(false);
+  // The stale UI keeps its local draft intent; the rejected candidate never retargets the winner.
+  expect(await nativeRows(page)).toEqual(winningRows); expect(await frame(page)).toEqual(priorFrame); expect(await details(page).textContent()).toBe(detail);
+  await expect(select(page)).toHaveValue("shape"); expect(await checkbox(page).isChecked()).toBe(false);
+  for (const record of retained) expect((await handles(page)).find((item) => item.id === record.id)).toEqual(record);
+  await page.reload(); await expect(page.locator("#status")).toContainText("restored draft");
+  expect(await nativeRows(page)).toEqual(winningRows); await select(page).selectOption("shape");
+  await expect(checkbox(page)).toBeChecked();
+  expect(JSON.parse((await details(page).textContent())!)).toEqual(winner.elements.find((element) => element.id === "shape"));
+  await pixels(page, false, 255); await other.close();
+});
+
+// --- Case D: a committed render fault keeps the durable hidden publication --------------------------
+test("production visibility: a committed render fault keeps the durable publication and reload renders the hidden shape", async ({ page }) => {
+  await instrument(page); await healthy(page); const before = await savedPrior(page); await select(page).selectOption("shape");
+  await checkbox(page).uncheck(); const priorFrame = await frame(page);
+  await set(page, { renderFault: "yes" }); await button(page, "Apply visibility").click();
+  await expect(status(page)).toContainText("published, but rendering failed");
+  const after = await publication(page, before, false);
+  expect(await frame(page)).toEqual(priorFrame); await expect(select(page)).toHaveValue("");
+  await expect(status(page)).not.toContainText("rolled back");
+  await set(page, { renderFault: "" }); await page.reload();
+  await expect(page.locator("#status")).toContainText("restored draft");
+  expect(await nativeRows(page)).toEqual(after); await pixels(page, false, 0);
+  await select(page).selectOption("shape"); await expect(checkbox(page)).not.toBeChecked();
+  expect(JSON.parse((await details(page).textContent())!)).toEqual(current(after).document.elements.find((element) => element.id === "shape"));
+});
+
+// --- Case E: pagehide owns the own visibility flight and closes every created bitmap exactly once ---
+for (const reject of [false, true]) test(`production visibility: pagehide owns settlement and closes every bitmap once (reject=${reject})`, async ({ page }) => {
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await instrument(page); await healthy(page); const before = await savedPrior(page); await select(page).selectOption("shape");
+  await checkbox(page).uncheck(); const priorFrame = await frame(page); const detail = (await details(page).textContent())!;
+  const retained = (await handles(page)).filter((record) => record.closes === 0); expect(retained).toHaveLength(1);
+  await set(page, { hold: "yes", fault: reject ? "preparation" : "" }); await button(page, "Apply visibility").click();
+  await expect(page.locator("html")).toHaveAttribute("data-preparation", "pending");
+  const feedback = (await status(page).textContent())!;
+  // Arm the checked guard before the double pagehide: disposal must not prefill from a null selection.
+  await set(page, { disposalGuard: "yes" });
+  await page.evaluate(() => { window.dispatchEvent(new Event("pagehide")); window.dispatchEvent(new Event("pagehide")); });
+  expect(await page.locator("html").getAttribute("data-late-checked")).toBeNull();
+  expect(await page.locator("html").getAttribute("data-late-controller")).toBeNull();
+  await expect(status(page)).toHaveText(feedback); expect(await details(page).textContent()).toBe(detail);
+  const frozen = await pane(page); const selected = await select(page).inputValue();
+  for (const record of retained) expect((await handles(page)).find((item) => item.id === record.id)).toEqual(record);
+  await set(page, { settle: "yes" });
+  await expect.poll(async () => (await handles(page)).every((record) => record.closes === 1 && !record.useful)).toBe(true);
+  if (reject) expect(await nativeRows(page)).toEqual(before); else await publication(page, before, false);
+  // Only after the owned flight settled is the effect watch safe to arm for the reentrant DOM flood.
+  await set(page, { watch: "yes", effects: "{}" });
+  for (const name of origins) await button(page, name).dispatchEvent("click");
+  for (const form of controlForms) await page.locator(form).dispatchEvent("submit");
+  await select(page).dispatchEvent("change");
+  for (const input of await page.locator("input,textarea").all()) await input.dispatchEvent("input");
+  await set(page, { watch: "no" }); expect(await page.locator("html").getAttribute("data-effects")).toBe("{}");
+  expect(await pane(page)).toBe(frozen); await expect(select(page)).toHaveValue(selected);
+  expect(await page.locator("html").getAttribute("data-late-checked")).toBeNull();
+  expect(await page.locator("html").getAttribute("data-late-controller")).toBeNull();
+  await expect(status(page)).toHaveText(feedback); expect(await details(page).textContent()).toBe(detail);
+  expect(await frame(page)).toEqual(priorFrame); expect(errors).toEqual([]);
+});
