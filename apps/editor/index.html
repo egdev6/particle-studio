@@ -96,6 +96,15 @@
         <button id="apply-fill-color" type="submit" disabled>Apply fill color</button>
       </form>
       <p id="fill-color-status" role="status" aria-label="Fill color status" aria-live="polite" aria-atomic="true">Loading local scene…</p>
+      <form id="shape-visibility" aria-label="Shape visibility controls" aria-busy="false" novalidate>
+        <fieldset>
+          <legend>Selected shape authored visibility; absence is visible and hidden ancestors still apply</legend>
+          <label for="shape-visible">Shape visible</label>
+          <input id="shape-visible" type="checkbox" disabled />
+        </fieldset>
+        <button id="apply-visibility" type="submit" disabled>Apply visibility</button>
+      </form>
+      <p id="visibility-status" role="status" aria-label="Visibility status" aria-live="polite" aria-atomic="true">Loading local scene…</p>
     </section>
     <p id="status" role="status">Loading local scene…</p>
     <canvas id="scene" width="256" height="160" aria-label="Current scene"></canvas>

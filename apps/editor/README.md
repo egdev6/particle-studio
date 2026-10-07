@@ -375,3 +375,13 @@ Issue #143 sigue abierta; esto no es aprobación ni recibo de ejecución.
 
 La frase «no añade control de Inspector, UI…» del apartado SDK describe solo esas APIs: no montan una interfaz.
 Este módulo sí ofrece el control independiente; su integración en la página productiva sigue pendiente.
+
+## Montaje productivo de la visibilidad (issue #143)
+
+El apartado anterior describe la etapa previa: el control independiente aún no estaba montado. Ahora la
+página productiva sí monta `mountEditorVisibilityControls` con etiquetas en inglés; solo una shape publicada
+habilita la casilla marcada con su visibilidad autorada (ausente equivale a visible local) y nada se escribe
+hasta pulsar Apply. Un ancestro oculto conserva su guía, comparte el carril de nueve orígenes cableados y la
+actividad existente, y cada publicación exige reseleccionar. En pagehide la visibilidad se libera antes que
+el Inspector, sin apropiarse de recursos ni cancelar o reintentar. Esto declara solo el cableado: no es
+aprobación nativa, ni matriz completa de los nueve orígenes, ni prueba de recarga fría hasta la ejecución.
