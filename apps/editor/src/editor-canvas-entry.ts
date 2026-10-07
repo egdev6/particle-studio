@@ -8,6 +8,7 @@ import { mountEditorPositionControls } from "./editor-position-controls.js";
 import { mountEditorDimensionControls } from "./editor-dimension-controls.js";
 import { mountEditorOpacityControls } from "./editor-opacity-controls.js";
 import { mountEditorFillColorControls } from "./editor-fill-color-controls.js";
+import { mountEditorVisibilityControls } from "./editor-visibility-controls.js";
 import { renderEditorFrame } from "./editor-frame.js";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#scene")!;
@@ -18,6 +19,7 @@ let positionControls: ReturnType<typeof mountEditorPositionControls> | undefined
 let dimensionControls: ReturnType<typeof mountEditorDimensionControls> | undefined;
 let opacityControls: ReturnType<typeof mountEditorOpacityControls> | undefined;
 let fillColorControls: ReturnType<typeof mountEditorFillColorControls> | undefined;
+let visibilityControls: ReturnType<typeof mountEditorVisibilityControls> | undefined;
 const inspector = mountEditorElementInspector({
   select: document.querySelector<HTMLSelectElement>("#scene-element")!,
   details: document.querySelector<HTMLElement>("#element-details")!,
@@ -27,6 +29,7 @@ const inspector = mountEditorElementInspector({
     dimensionControls?.syncSelection();
     opacityControls?.syncSelection();
     fillColorControls?.syncSelection();
+    visibilityControls?.syncSelection();
   },
 });
 const currentMetadata = () => {
@@ -58,6 +61,7 @@ const activity: EditorImportActivity = {
     dimensionControls?.setBusy(true);
     opacityControls?.setBusy(true);
     fillColorControls?.setBusy(true);
+    visibilityControls?.setBusy(true);
     inspector.setBusy(true);
     return true;
   },
@@ -84,6 +88,9 @@ const activity: EditorImportActivity = {
     fillColorControls?.setBusy(false);
     fillColorControls?.setReady(ready);
     fillColorControls?.syncSelection();
+    visibilityControls?.setBusy(false);
+    visibilityControls?.setReady(ready);
+    visibilityControls?.syncSelection();
   },
 };
 const renderCurrent = () => {
@@ -199,10 +206,24 @@ fillColorControls = mountEditorFillColorControls({
     return message;
   },
 });
+visibilityControls = mountEditorVisibilityControls({
+  form: document.querySelector<HTMLFormElement>("#shape-visibility")!,
+  visible: document.querySelector<HTMLInputElement>("#shape-visible")!,
+  button: document.querySelector<HTMLButtonElement>("#apply-visibility")!,
+  status: document.querySelector<HTMLElement>("#visibility-status")!,
+  activity, getSelection: inspector.getSelection, getCurrent: currentMetadata,
+  setShapeVisibility: async (request) => { await browser.setShapeVisibility(request); },
+  onPublished: () => {
+    const message = renderCurrent();
+    status.textContent = message;
+    return message;
+  },
+});
 positionControls.syncSelection();
 dimensionControls.syncSelection();
 opacityControls.syncSelection();
 fillColorControls.syncSelection();
+visibilityControls.syncSelection();
 window.addEventListener("pagehide", () => {
   controls.dispose();
   pngControls.dispose();
@@ -211,6 +232,7 @@ window.addEventListener("pagehide", () => {
   dimensionControls?.dispose();
   opacityControls?.dispose();
   fillColorControls?.dispose();
+  visibilityControls?.dispose();
   inspector.dispose();
   void browser.dispose();
 }, { once: true });
@@ -238,6 +260,8 @@ async function renderStartup() {
     opacityControls?.syncSelection();
     fillColorControls?.setReady(true);
     fillColorControls?.syncSelection();
+    visibilityControls?.setReady(true);
+    visibilityControls?.syncSelection();
   } catch (error) {
     if (browser.disposed) return;
     const message = error instanceof Error ? error.message : "Unable to restore scene.";
@@ -252,6 +276,8 @@ async function renderStartup() {
     document.querySelector<HTMLElement>("#opacity-status")!.textContent = `Opacity editing unavailable. ${message}`;
     fillColorControls?.setReady(false);
     document.querySelector<HTMLElement>("#fill-color-status")!.textContent = `Fill color editing unavailable. ${message}`;
+    visibilityControls?.setReady(false);
+    document.querySelector<HTMLElement>("#visibility-status")!.textContent = `Visibility editing unavailable. ${message}`;
   }
 }
 void renderStartup();
