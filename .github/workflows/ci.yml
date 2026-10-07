@@ -11,6 +11,14 @@ on:
       - docs/docs-qa-03-headless-deployment
       - docs/docs-qa-04-functional-guide
       - docs/docs-qa-05-agent-qa
+      - feat/shape-visibility-tracker
+      - feat/shape-visibility-01-command
+      - feat/shape-visibility-02-api
+      - feat/shape-visibility-03-controls
+      - feat/shape-visibility-04-hardening
+      - feat/shape-visibility-05-production
+      - feat/shape-visibility-06-concurrency
+      - feat/shape-visibility-07-lifetime
   push:
     branches: [develop, main]
 
