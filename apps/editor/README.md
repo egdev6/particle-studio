@@ -367,3 +367,11 @@ identity/refresh, exact permitted failed asset writes and settlement-aware dispo
 `editor-rectangle-controls.test.tsx` covers capture/shared activity/disposal;
 `browser/rectangle-create.spec.ts` uses the built entry, native IDB, real PNGs and
 per-bitmap lifetimes to cover pixels/refresh, winners and both pagehide outcomes.
+## Controles de visibilidad en el Inspector (issue #143)
+
+`mountEditorVisibilityControls` es un control independiente con datos prestados: no está montado en producción, no crea marcado ni píxeles nativos y no aporta prueba de recarga fría.
+La casilla refleja la visibilidad autorada opcional (ausente equivale a visible), avisa de ancestros ocultos y no inserta propiedades; la entrada solo se captura al pulsar Apply.
+Issue #143 sigue abierta; esto no es aprobación ni recibo de ejecución.
+
+La frase «no añade control de Inspector, UI…» del apartado SDK describe solo esas APIs: no montan una interfaz.
+Este módulo sí ofrece el control independiente; su integración en la página productiva sigue pendiente.
