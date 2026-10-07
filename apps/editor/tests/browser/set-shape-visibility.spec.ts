@@ -180,3 +180,274 @@ test("production visibility: the startup unpersisted sample exposes no visibilit
   await open(page);
   await expect(checkbox(page)).toBeDisabled(); await expect(button(page, "Apply visibility")).toBeDisabled();
 });
+
+// --- Unit 6 shared native triangulation instrumentation -------------------------------------------
+// Appended only; the frozen 182-line prefix above is untouched. These helpers read the genuine
+// IndexedDB rail through the real readonly pointers.get preparation and never wrap the conditional
+// readwrite CAS. The value/checked disposal hooks are staged here for the later pagehide unit and are
+// inert for the held-origin, toggle-without-Apply and cross-feedback cases below.
+const origins = ["Import editable JSON", "Create blank scene", "Import PNG", "Add rectangle",
+  "Apply position", "Apply dimensions", "Apply opacity", "Apply fill color", "Apply visibility"];
+const shifts: Record<string, Record<string, string>> = {
+  "Apply position": { "Position X": "32.5", "Position Y": "28.25" },
+  "Apply dimensions": { "Dimension width": "40.5", "Dimension height": "20.25" },
+  "Apply opacity": { "Shape opacity": "0.5" },
+  "Apply fill color": { "Shape fill color": "#AbC123" },
+};
+const patches: Record<string, Record<string, unknown>> = {
+  "Apply position": { x: 32.5, y: 28.25 },
+  "Apply dimensions": { width: 40.5, height: 20.25 },
+  "Apply opacity": { opacity: 0.5 },
+  "Apply fill color": { fillColor: "#AbC123" },
+  "Apply visibility": { visible: false },
+};
+const controlForms = ["#json-import", "#png-import", "#rectangle-create", "#shape-position",
+  "#shape-dimensions", "#shape-opacity", "#shape-fill-color", "#shape-visibility"];
+// The sealed empty-scene fixture the real "Create blank scene" button publishes at startup.
+const blankScene: SceneDocumentV1 = { schemaVersion: 1, durationUs: 1_000_000, seed: 42, loop: true,
+  playbackRange: { startUs: 0, endUs: 1_000_000 }, tracks: [], rootIds: ["root"],
+  elements: [{ id: "root", type: "group", childrenIds: [] }] };
+async function set(page: Page, values: Record<string, string>) {
+  await page.locator("html").evaluate((root, values) => Object.assign((root as HTMLElement).dataset, values), values);
+}
+// Control-panel snapshot: identity, value and checked primitive; never the full page innerHTML that
+// also carries the instrumentation dataset attributes.
+async function pane(page: Page) {
+  return page.locator("body").evaluate(() => JSON.stringify(Array.from(document.querySelectorAll("input,select,textarea"),
+    (element) => ({ id: (element as HTMLInputElement).id, value: (element as HTMLInputElement).value,
+      checked: (element as HTMLInputElement).checked }))));
+}
+async function handles(page: Page) {
+  await page.evaluate(() => window.dispatchEvent(new Event("inspect-bitmaps")));
+  return JSON.parse((await page.locator("html").getAttribute("data-bitmaps")) ?? "[]") as { id: number; closes: number; useful: boolean }[];
+}
+// UUID ledger reads the data-ids ledger; the existing `ids` array above stays the locator label list.
+async function uuids(page: Page) {
+  return JSON.parse((await page.locator("html").getAttribute("data-ids")) ?? "[]") as string[];
+}
+async function instrument(page: Page) {
+  await page.addInitScript(() => {
+    const hit = (name: string) => {
+      const root = document.documentElement; if (root.dataset.watch !== "yes") return;
+      const counts = JSON.parse(root.dataset.effects ?? "{}") as Record<string, number>;
+      counts[name] = (counts[name] ?? 0) + 1; root.dataset.effects = JSON.stringify(counts);
+    };
+    const uuid = crypto.randomUUID.bind(crypto); const allocated: string[] = [];
+    crypto.randomUUID = () => { hit("uuid"); const id = uuid(); allocated.push(id); document.documentElement.dataset.ids = JSON.stringify(allocated); return id; };
+    for (const name of ["get", "getAll", "put", "add", "delete", "clear"] as const) {
+      const method = IDBObjectStore.prototype[name];
+      Object.defineProperty(IDBObjectStore.prototype, name, { configurable: true, value: function (this: IDBObjectStore, ...args: unknown[]) {
+        hit(`idb-${name}`); return Reflect.apply(method, this, args);
+      } });
+    }
+    const open = IDBFactory.prototype.open;
+    IDBFactory.prototype.open = function (...args) { hit("database-open"); return open.apply(this, args); };
+    const bytes = Blob.prototype.arrayBuffer;
+    Blob.prototype.arrayBuffer = function () { hit("asset-bytes"); return bytes.call(this); };
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    crypto.subtle.digest = (...args) => { hit("sha"); return digest(...args); };
+    const get = IDBObjectStore.prototype.get;
+    IDBObjectStore.prototype.get = function (key) {
+      const request = get.call(this, key); const root = document.documentElement;
+      // Hold only the genuine readonly preparation; the conditional rw CAS is never wrapped.
+      if (this.name !== "pointers" || this.transaction.mode !== "readonly" || root.dataset.hold !== "yes") return request;
+      root.dataset.hold = "consumed";
+      const intercept = (event: Event) => {
+        event.stopImmediatePropagation(); request.removeEventListener("success", intercept, true); root.dataset.preparation = "pending";
+        void (async () => {
+          while (root.dataset.settle !== "yes") await new Promise((resolve) => setTimeout(resolve, 10));
+          const reject = root.dataset.fault === "preparation";
+          if (reject) Object.defineProperty(request, "error", { value: new DOMException("Preparation fault", "UnknownError") });
+          request.dispatchEvent(new Event(reject ? "error" : "success", { cancelable: true }));
+          setTimeout(() => { root.dataset.preparation = "settled"; }, 0);
+        })();
+      };
+      request.addEventListener("success", intercept, true); return request;
+    };
+    const clear = CanvasRenderingContext2D.prototype.clearRect;
+    CanvasRenderingContext2D.prototype.clearRect = function (...args) {
+      hit("render");
+      if (document.documentElement.dataset.renderFault === "yes") throw new Error("Post-commit before-clear render fault");
+      return clear.apply(this, args);
+    };
+    const value = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!;
+    Object.defineProperty(HTMLInputElement.prototype, "value", { ...value, set(this: HTMLInputElement, next: string) {
+      if (document.documentElement.dataset.disposalGuard === "yes" &&
+        this.closest("#shape-position,#shape-dimensions,#shape-opacity,#shape-fill-color,#shape-visibility")) {
+        document.documentElement.dataset.lateController = this.id; throw new Error(`Controller active after pagehide: ${this.id}`);
+      }
+      value.set!.call(this, next);
+    } });
+    const checked = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked")!;
+    Object.defineProperty(HTMLInputElement.prototype, "checked", { ...checked, set(this: HTMLInputElement, next: boolean) {
+      if (document.documentElement.dataset.disposalGuard === "yes" && this.id === "shape-visible") {
+        document.documentElement.dataset.lateChecked = "yes"; throw new Error("Visibility controller active after pagehide");
+      }
+      checked.set!.call(this, next);
+    } });
+    const decode = globalThis.createImageBitmap;
+    const records: { id: number; closes: number; bitmap: ImageBitmap }[] = [];
+    const update = () => {
+      document.documentElement.dataset.bitmaps = JSON.stringify(records.map(({ id, closes, bitmap }) => {
+        let useful = false;
+        try { const canvas = document.createElement("canvas"); canvas.width = canvas.height = 1;
+          const context = canvas.getContext("2d")!; context.drawImage(bitmap, 0, 0);
+          useful = context.getImageData(0, 0, 1, 1).data[3] === 255;
+        } catch { /* Closed native handles cannot be drawn. */ }
+        return { id, closes, useful };
+      }));
+    };
+    window.addEventListener("inspect-bitmaps", update);
+    globalThis.createImageBitmap = async (source: ImageBitmapSource) => {
+      hit("decode"); const bitmap = await decode(source); const record = { id: records.length + 1, closes: 0, bitmap }; records.push(record);
+      const close = bitmap.close.bind(bitmap); bitmap.close = () => { hit("close"); close(); record.closes += 1; update(); };
+      update(); return bitmap;
+    };
+  });
+}
+// General whole-row oracle: independent canonical revision, unchanged asset store, retained prior
+// history and the exact saved+draft pointer pair. Reuses the frozen current/ordered/revision helpers.
+async function published(page: Page, before: Rows, document: SceneDocumentV1) {
+  const after = await nativeRows(page); const prior = current(before); const next = current(after);
+  const expected = revision(document, next.revisionId, prior.sequence + 1);
+  expect(next.revisionId).not.toBe(prior.revisionId); expect(next).toEqual(expected); expect(next.canonicalBytes).toEqual(expected.canonicalBytes);
+  expect(after.assets).toEqual(before.assets);
+  for (const row of before.revisions as unknown[]) expect(after.revisions).toContainEqual(row);
+  expect(ordered(after)).toEqual(ordered({ ...before, revisions: [...before.revisions as unknown[], next],
+    pointers: [{ documentId: BROWSER_DOCUMENT, saved: (before.pointers as { saved: unknown }[])[0]!.saved,
+      draft: { kind: "draft", documentId: BROWSER_DOCUMENT, revisionId: next.revisionId, sequence: next.sequence } }] }));
+  return after;
+}
+
+// --- Matrix A: every genuine origin held during its real readonly preparation ---------------------
+for (const held of origins) test(`production visibility held origin ${held} blocks all nine actions, captures intent and publishes exactly its own change`, async ({ page }) => {
+  const blank = held === "Create blank scene";
+  if (blank) { await instrument(page); await open(page); }
+  else {
+    await instrument(page); await healthy(page); await savedPrior(page); await select(page).selectOption("shape");
+    for (const [name, value] of Object.entries(shifts[held] ?? {})) await field(page, name).fill(value);
+    if (held === "Apply visibility") await checkbox(page).uncheck();
+    if (held === "Import editable JSON") await field(page, "Editable JSON").fill(JSON.stringify({ ...scene(), seed: 123 }));
+    if (held === "Import PNG") {
+      // savedPrior reload clears the file input and geometry; stage a genuine second import.
+      await field(page, "PNG file").setInputFiles({ name: "second.png", mimeType: "image/png", buffer: png });
+      for (const [key, value] of Object.entries({ x: 180, y: 40, width: 8, height: 8 })) await field(page, `PNG ${key}`).fill(String(value));
+      await expect(button(page, held)).toBeEnabled();
+    }
+  }
+  // Genuine prior source before the held origin begins; the blank startup legitimately has no draft pointer.
+  const before = await nativeRows(page); const detail = await details(page).textContent();
+  const priorFrame = await frame(page); const allocated = (await uuids(page)).length;
+  const checkedDraft = await checkbox(page).isChecked();
+  await set(page, { hold: "yes" });
+  await button(page, held).evaluate((target) => {
+    (target as HTMLButtonElement).click();
+    for (const other of document.querySelectorAll("button")) other.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    for (const form of document.forms) form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    const combo = document.querySelector<HTMLSelectElement>("#scene-element")!;
+    combo.value = "root"; combo.dispatchEvent(new Event("change", { bubbles: true }));
+    for (const input of document.querySelectorAll("input,textarea")) input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await expect(page.locator("html")).toHaveAttribute("data-preparation", "pending");
+  await set(page, { watch: "yes", effects: "{}" });
+  for (const name of origins) { await expect(button(page, name)).toBeDisabled(); await button(page, name).dispatchEvent("click"); }
+  for (const form of controlForms) await page.locator(form).dispatchEvent("submit");
+  await expect(select(page)).toBeDisabled(); await expect(checkbox(page)).toBeDisabled();
+  expect(await checkbox(page).isChecked()).toBe(checkedDraft);
+  expect(await page.locator("input,textarea,select").evaluateAll((elements) => elements.every((element) => (element as unknown as HTMLInputElement).disabled))).toBe(true);
+  for (const input of await page.locator("input,textarea").all()) await input.dispatchEvent("input");
+  // Effects watch must be read and cleared before any native oracle opens its own DB connection.
+  await set(page, { watch: "no" }); expect(await page.locator("html").getAttribute("data-effects")).toBe("{}");
+  expect(await nativeRows(page)).toEqual(before); expect(await frame(page)).toEqual(priorFrame);
+  expect(await details(page).textContent()).toBe(detail); await expect(select(page)).toHaveValue(blank ? "" : "shape");
+  await set(page, { settle: "yes" }); await expect(select(page)).toBeEnabled(); await expect(select(page)).toHaveValue("");
+  const rows = await nativeRows(page); expect(rows.revisions).toHaveLength((before.revisions as unknown[]).length + 1);
+  if (blank) {
+    // Vacuous blank authority: no prior current, so the whole first canonical draft row is checked directly.
+    expect(current(rows)).toEqual(revision(blankScene, current(rows).revisionId, 1)); expect(rows.assets).toEqual([]);
+    expect(rows.pointers).toEqual([{ documentId: BROWSER_DOCUMENT, saved: null,
+      draft: { kind: "draft", documentId: BROWSER_DOCUMENT, revisionId: current(rows).revisionId, sequence: 1 } }]);
+  } else if (held === "Import editable JSON") {
+    await published(page, before, { ...scene(), seed: 123 } as SceneDocumentV1);
+  } else if (held === "Import PNG" || held === "Add rectangle") {
+    const appended = current(rows).document.elements.at(-1)!; const expected = structuredClone(current(before).document);
+    expected.rootIds.push(appended.id);
+    expected.elements.push(held === "Import PNG"
+      ? { id: appended.id, type: "image", x: 180, y: 40, width: 8, height: 8, opacity: 1,
+        asset: { sha256: hash, mimeType: "image/png", byteLength: png.length, intrinsicWidth: 1, intrinsicHeight: 1 } }
+      : { id: appended.id, type: "shape", x: 16, y: 24, width: 120, height: 80, opacity: 1 });
+    await published(page, before, expected);
+  } else {
+    const expected = structuredClone(current(before).document);
+    Object.assign(expected.elements.find((element) => element.id === "shape")!, patches[held] ?? {});
+    await published(page, before, expected);
+  }
+  if (held === "Apply visibility") expect((await uuids(page)).length).toBe(allocated + 2);
+  // Any genuine publication clears the selection epoch; visibility and sibling editors stay guarded.
+  await expect(select(page)).toHaveValue(""); await expect(checkbox(page)).toBeDisabled();
+  await expect(button(page, "Apply visibility")).toBeDisabled();
+  // The origin's own editor keeps its completion line; every foreign editor returns to guidance.
+  const originKind = held === "Apply position" ? "Position" : held === "Apply dimensions" ? "Dimension"
+    : held === "Apply opacity" ? "Opacity" : held === "Apply fill color" ? "Fill color" : null;
+  for (const kind of ["Position", "Dimension", "Opacity", "Fill color"]) {
+    if (kind === originKind) continue;
+    await expect(page.getByRole("status", { name: `${kind} status`, exact: true })).toContainText("Select a published shape");
+  }
+  if (originKind) await expect(page.getByRole("status", { name: `${originKind} status`, exact: true })).toContainText("complete");
+});
+
+// --- Case B: explicit toggle without Apply stays local, then a held own apply commits once --------
+test("production visibility: unchecking without Apply publishes nothing and a held own apply commits exactly once", async ({ page }) => {
+  await instrument(page); await healthy(page); const before = await savedPrior(page); await select(page).selectOption("shape");
+  const priorFrame = await frame(page); const allocated = (await uuids(page)).length;
+  const shapeBefore = current(before).document.elements.find((element) => element.id === "shape")!;
+  expect(shapeBefore).not.toHaveProperty("visible"); await expect(checkbox(page)).toBeChecked();
+  const panel = JSON.parse(await pane(page)) as { id: string; checked: boolean }[];
+  expect(panel.find((entry) => entry.id === "shape-visible")!.checked).toBe(true);
+  await checkbox(page).uncheck(); // No Apply yet: the authored flag must stay absent and nothing persists.
+  expect((JSON.parse(await pane(page)) as { id: string; checked: boolean }[]).find((entry) => entry.id === "shape-visible")!.checked).toBe(false);
+  expect(await nativeRows(page)).toEqual(before); expect(await frame(page)).toEqual(priorFrame);
+  expect((await uuids(page)).length).toBe(allocated); expect(await details(page).textContent()).not.toBe("");
+  expect(current(await nativeRows(page)).document.elements.find((element) => element.id === "shape")).not.toHaveProperty("visible");
+  await set(page, { hold: "yes" });
+  await button(page, "Apply visibility").evaluate((target) => {
+    (target as HTMLButtonElement).click();
+    for (const other of document.querySelectorAll("button")) other.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    for (const form of document.forms) form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    const combo = document.querySelector<HTMLSelectElement>("#scene-element")!;
+    combo.value = "root"; combo.dispatchEvent(new Event("change", { bubbles: true }));
+    for (const input of document.querySelectorAll("input,textarea")) input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await expect(page.locator("html")).toHaveAttribute("data-preparation", "pending");
+  await set(page, { watch: "yes", effects: "{}" });
+  for (const name of origins) { await expect(button(page, name)).toBeDisabled(); await button(page, name).dispatchEvent("click"); }
+  for (const form of controlForms) await page.locator(form).dispatchEvent("submit");
+  await page.locator("#shape-visible").dispatchEvent("click");
+  await set(page, { watch: "no" }); expect(await page.locator("html").getAttribute("data-effects")).toBe("{}");
+  expect(await nativeRows(page)).toEqual(before); expect(await frame(page)).toEqual(priorFrame);
+  await set(page, { settle: "yes" }); await expect(select(page)).toHaveValue(""); await expect(checkbox(page)).toBeDisabled();
+  await publication(page, before, false); expect((await uuids(page)).length).toBe(allocated + 2);
+  await expect(status(page)).toContainText("complete");
+});
+
+// --- Case F: own settlement retains visibility feedback while the inspector clears siblings -------
+test("production visibility: own settlement retains its feedback while the cross-controller refresh clears details and re-selection prefills locally", async ({ page }) => {
+  await instrument(page); await healthy(page); const before = await savedPrior(page); await select(page).selectOption("shape");
+  // A same-source failure is retained before the genuine publication (no source change, no sibling churn).
+  await set(page, { hold: "yes", fault: "preparation", settle: "yes" }); await button(page, "Apply visibility").click();
+  await expect(status(page)).toContainText("failed"); await expect(select(page)).toHaveValue("shape");
+  await expect(checkbox(page)).toBeChecked(); expect(await nativeRows(page)).toEqual(before);
+  await set(page, { hold: "", fault: "", settle: "" });
+  // Own genuine publication: the inspector consumes the new source while visibility keeps its completion.
+  await checkbox(page).uncheck(); await button(page, "Apply visibility").click(); await expect(status(page)).toContainText("complete");
+  const after = await publication(page, before, false);
+  await expect(select(page)).toHaveValue(""); expect(await details(page).textContent()).toBe("");
+  await expect(page.getByRole("status", { name: "Element inspection status", exact: true })).toContainText(current(after).revisionId);
+  for (const name of ["Position status", "Dimension status", "Opacity status", "Fill color status"]) {
+    await expect(page.getByRole("status", { name, exact: true })).toContainText(/Select a published shape|Create a scene or import/i);
+  }
+  await expect(status(page)).toContainText("complete");
+  // Re-selecting the new source prefills the authored false locally; no flag is injected or removed.
+  await select(page).selectOption("shape"); await expect(checkbox(page)).not.toBeChecked();
+  expect(current(after).document.elements.find((element) => element.id === "shape")).toHaveProperty("visible", false);
+});
