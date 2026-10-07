@@ -820,3 +820,93 @@ describe("browser shape fill color API", () => {
     await browser.dispose();
   });
 });
+
+type VisibilityRequest = import("../src/editor-session.js").ShapeVisibilityRequest;
+type VisibilityBrowser = ReturnType<typeof createBrowserEditorSession>;
+
+it("visibility captures four getters once, frozen before SDK callbacks and owned-lane reentry", async () => {
+  const pending = deferred<void>(); const release = vi.fn(); const clear = vi.fn();
+  const revision = { documentId: "browser-document", revisionId: "source", sequence: 1, document: FIRST_SLICE_DOCUMENT };
+  const previous = { revision, workspace: { images: [] }, release }; const workspace = { current: previous };
+  const input = { documentId: revision.documentId, revisionId: revision.revisionId, elementId: "shape-1", visible: false };
+  const expected = { ...input }; const reads: string[] = []; const request = { ...input };
+  for (const key of Object.keys(input) as (keyof typeof input)[]) Object.defineProperty(request, key, { get() { reads.push(key); return input[key]; } });
+  const setShapeVisibility = vi.fn(async (captured: VisibilityRequest) => {
+    expect(captured).toEqual(expected); expect(Object.isFrozen(captured)).toBe(true); expect(reads).toEqual(Object.keys(input));
+    Object.assign(input, { documentId: "foreign", revisionId: "late", elementId: "root", visible: true });
+    await expect(browser.setShapeVisibility(input)).rejects.toThrow("UNAVAILABLE");
+    await pending.promise; expect(captured).toEqual(expected);
+    workspace.current = { ...previous, revision: { ...revision, revisionId: "actual", sequence: 2 } };
+  });
+  mocks.persistence.mockReturnValue({ readPointers: async () => ({ draft: revision, saved: null }) });
+  mocks.session.mockReturnValue({ workspace, cache: { clear }, reload: async () => previous, setShapeVisibility });
+  const browser = createBrowserEditorSession() as VisibilityBrowser; await browser.start();
+  expect(typeof browser.setShapeVisibility).toBe("function"); const flight = browser.setShapeVisibility(request);
+  pending.resolve(); const next = await flight;
+  expect(next).toBe(browser.current); expect(next?.revision).toBe(workspace.current.revision);
+  expect(next).not.toHaveProperty("release"); expect(next).not.toHaveProperty("cache");
+  expect(reads).toEqual(Object.keys(input)); expect(setShapeVisibility).toHaveBeenCalledTimes(1);
+  await browser.dispose(); expect(release).toHaveBeenCalledTimes(1); expect(clear).toHaveBeenCalledTimes(1);
+});
+
+it.each(["not-ready", "absent", "busy", "disposed"])("visibility unavailable %s rejects before caller getters or effects", async (state) => {
+  const f = await pngFixture(); const browser = f.browser as VisibilityBrowser; let busy: Promise<unknown> | undefined;
+  if (state === "absent" || state === "disposed") await browser.start();
+  if (state === "busy") { await browser.start(); await browser.importJson(f.json); busy = browser.importPng(f.file, f.rectangle); }
+  if (state === "disposed") await browser.dispose();
+  expect(typeof browser.setShapeVisibility).toBe("function");
+  const get = vi.fn(() => { throw new Error("caller getter"); });
+  const input = Object.defineProperty({ documentId: "browser-document", revisionId: "source", elementId: "shape-1", visible: true }, "visible", { get });
+  const ids = vi.spyOn(crypto, "randomUUID"); ids.mockClear();
+  for (const spy of [f.readPointers, f.readAsset, f.writeAsset, f.writeRevision]) spy.mockClear();
+  await expect(browser.setShapeVisibility(input)).rejects.toThrow("EDITOR_SHAPE_VISIBILITY_UNAVAILABLE");
+  expect(get).not.toHaveBeenCalled(); expect(ids).not.toHaveBeenCalled();
+  for (const spy of [f.readPointers, f.readAsset, f.writeAsset, f.writeRevision]) expect(spy).not.toHaveBeenCalled();
+  if (busy) { f.gate.resolve(new Uint8Array([1, 2, 3]).buffer); await busy; }
+  await browser.dispose();
+});
+
+it("visibility cannot replace an owned PNG flight started by a request getter", async () => {
+  const f = await pngFixture(); const browser = f.browser as VisibilityBrowser;
+  await browser.start(); await browser.importJson(f.json);
+  const source = browser.current!; const prior = await f.persistence.readPointers("browser-document");
+  let pngFlight: Promise<BrowserCurrent | null> | undefined;
+  const request = { documentId: source.revision.documentId, revisionId: source.revision.revisionId, elementId: "shape-1", visible: false };
+  Object.defineProperty(request, "documentId", { get() { pngFlight = browser.importPng(f.file, f.rectangle); return source.revision.documentId; } });
+  try {
+    await expect(browser.setShapeVisibility(request)).rejects.toThrow("EDITOR_SHAPE_VISIBILITY_UNAVAILABLE");
+    expect(browser.current).toBe(source); expect(await f.persistence.readPointers("browser-document")).toEqual(prior);
+    let disposed = false; const disposal = browser.dispose().then(() => { disposed = true; });
+    await Promise.resolve(); await Promise.resolve(); expect(disposed).toBe(false);
+    f.gate.resolve(new Uint8Array([1, 2, 3]).buffer); await pngFlight; await disposal; expect(disposed).toBe(true);
+  } finally {
+    f.gate.resolve(new Uint8Array([1, 2, 3]).buffer); await pngFlight?.catch(() => undefined); await browser.dispose();
+  }
+});
+
+it("real visibility publishes false, true and equal values durably through fake-indexeddb", async () => {
+  const f = await pngFixture(); const browser = f.browser as VisibilityBrowser;
+  await browser.start(); await browser.importJson(f.json);
+  const png = browser.importPng(f.file, f.rectangle);
+  f.gate.resolve(new Uint8Array([1, 2, 3]).buffer);
+  await png;
+  expect(typeof browser.setShapeVisibility).toBe("function"); const source = browser.current!;
+  const input = { documentId: source.revision.documentId, revisionId: source.revision.revisionId, elementId: "shape-1", visible: false };
+  const next = await browser.setShapeVisibility(input);
+  expect(next).toBe(browser.current); expect(next?.revision.sequence).toBe(source.revision.sequence + 1);
+  const expected = structuredClone(source.revision.document); Object.assign(expected.elements.find((element) => element.id === "shape-1")!, { visible: false }); expect(next?.revision.document).toStrictEqual(expected);
+  let pointers = await f.persistence.readPointers("browser-document");
+  expect(await f.persistence.readRevision("browser-document", pointers.draft!.revisionId)).toEqual(next!.revision);
+  for (const visible of [true, true]) {
+    const before = browser.current!;
+    const row = await browser.setShapeVisibility({ ...input, revisionId: before.revision.revisionId, visible });
+    expect(row).toBe(browser.current); expect(row?.revision.sequence).toBe(before.revision.sequence + 1);
+    const document = structuredClone(before.revision.document); Object.assign(document.elements.find((element) => element.id === "shape-1")!, { visible }); expect(row?.revision.document).toStrictEqual(document);
+  }
+  await expect(browser.setShapeVisibility(null as unknown as VisibilityRequest)).rejects.toThrow("EDITOR_SHAPE_VISIBILITY_INPUT_INVALID");
+  const held = browser.current!; pointers = await f.persistence.readPointers("browser-document");
+  f.readPointers.mockRejectedValueOnce(new Error("preparation failed"));
+  await expect(browser.setShapeVisibility({ ...input, revisionId: held.revision.revisionId })).rejects.toThrow();
+  expect(browser.current).toBe(held); expect(await f.persistence.readPointers("browser-document")).toEqual(pointers);
+  await browser.dispose();
+});

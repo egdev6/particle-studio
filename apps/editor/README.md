@@ -341,6 +341,17 @@ preview nativo (raíz/anidada, PNG, IndexedDB real, recarga fría) viven en
 `browser/set-shape-opacity.spec.ts`; describen cobertura, no ejecución ni
 aprobación nativa. No se añade capacidad de agente ni matriz SDK nativa aparte.
 
+## Shape visibility SDK (issue #143)
+
+`EditorSession.setShapeVisibility(request): Promise<void>` acepta los cuatro campos
+readonly de `ShapeVisibilityRequest`: documentId, revisionId, elementId y visible.
+Lee cada escalar una vez en una intención congelada antes de callbacks/awaits; exige
+`visible` booleano (false válido, sin coerción) y una shape publicada existente, y
+reutiliza la publicación durable condicional y la política human-UI existentes.
+`createBrowserEditorSession().setShapeVisibility(request)` replica la petición por el
+carril propio compartido. Es API de sesión y navegador en memoria: no añade control
+de Inspector, UI, píxeles nativos ni recarga fría. Issue #143 sigue abierta.
+
 Run `npm run validator:prepare` before
 `npx vitest run --project core apps/editor/tests/editor-frame.test.ts`.
 Use `npm run build`, `npm run dev`, and `npm run preview` for the JSON editor.
@@ -356,3 +367,21 @@ identity/refresh, exact permitted failed asset writes and settlement-aware dispo
 `editor-rectangle-controls.test.tsx` covers capture/shared activity/disposal;
 `browser/rectangle-create.spec.ts` uses the built entry, native IDB, real PNGs and
 per-bitmap lifetimes to cover pixels/refresh, winners and both pagehide outcomes.
+## Controles de visibilidad en el Inspector (issue #143)
+
+`mountEditorVisibilityControls` es un control independiente con datos prestados: no está montado en producción, no crea marcado ni píxeles nativos y no aporta prueba de recarga fría.
+La casilla refleja la visibilidad autorada opcional (ausente equivale a visible), avisa de ancestros ocultos y no inserta propiedades; la entrada solo se captura al pulsar Apply.
+Issue #143 sigue abierta; esto no es aprobación ni recibo de ejecución.
+
+La frase «no añade control de Inspector, UI…» del apartado SDK describe solo esas APIs: no montan una interfaz.
+Este módulo sí ofrece el control independiente; su integración en la página productiva sigue pendiente.
+
+## Montaje productivo de la visibilidad (issue #143)
+
+El apartado anterior describe la etapa previa: el control independiente aún no estaba montado. Ahora la
+página productiva sí monta `mountEditorVisibilityControls` con etiquetas en inglés; solo una shape publicada
+habilita la casilla marcada con su visibilidad autorada (ausente equivale a visible local) y nada se escribe
+hasta pulsar Apply. Un ancestro oculto conserva su guía, comparte el carril de nueve orígenes cableados y la
+actividad existente, y cada publicación exige reseleccionar. En pagehide la visibilidad se libera antes que
+el Inspector, sin apropiarse de recursos ni cancelar o reintentar. Esto declara solo el cableado: no es
+aprobación nativa, ni matriz completa de los nueve orígenes, ni prueba de recarga fría hasta la ejecución.

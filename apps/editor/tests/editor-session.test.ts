@@ -1363,3 +1363,136 @@ describe("shape fill color editing API", () => {
     for (const spy of [f.deps.commandId, f.deps.revisionId, f.deps.createdAt]) expect(spy).toHaveBeenCalledTimes(1);
   });
 });
+
+type VisibilityRequest = import("../src/editor-session.js").ShapeVisibilityRequest;
+type VisibilityEditor = ReturnType<typeof createEditorSession>;
+const visibilitySession = (f: ReturnType<typeof fixture>) => f.session as VisibilityEditor;
+const visibilityRequest = (f: ReturnType<typeof fixture>, visible = true): VisibilityRequest => { const source = f.session.workspace.current!.revision; return { documentId: source.documentId, revisionId: source.revisionId, elementId: "shape-1", visible }; };
+
+it.each(["root", "nested"])('visibility publishes exact %s shape content preserving tracks, fill and a hidden parent', async (placement) => {
+  const f = fixture(); const document = documentAt(0.4);
+  document.seed = 99; document.loop = false; document.playbackRange.startUs = 500_000;
+  Object.assign(document.elements[0]!, { width: 31, height: 47, opacity: 0.6, fillColor: "#3fa9F5" });
+  if (placement === "nested") { document.rootIds = ["group"];
+    document.elements.push({ id: "group", type: "group", childrenIds: ["shape-1"], transform: [1, 0, 0, 1, 30, 40], visible: false }); }
+  await f.importJson(document);
+  await f.session.importWorkflow({ kind: "image-import", file: new File([bytes], "image.png", { type: "image/png" }) });
+  const first = f.session.workspace.current!;
+  expect(first.revision.document.elements[0]!).not.toHaveProperty("visible");
+  expect(typeof visibilitySession(f).setShapeVisibility).toBe("function");
+  const real = durableEditing.createEditorDurableEditing; const dispatch = vi.fn(); const bridgePublish = vi.fn();
+  const bridge = vi.spyOn(durableEditing, "createEditorDurableEditing").mockImplementation((options) => {
+    const result = real({ ...options, workspace: { get current() { return options.workspace.current; }, publish: (request) => { bridgePublish(request); return options.workspace.publish(request); }, reload: options.workspace.reload.bind(options.workspace) } });
+    if (!result.ok) return result;
+    return { ok: true, editing: { snapshot: result.editing.snapshot.bind(result.editing), undo: result.editing.undo.bind(result.editing), redo: result.editing.redo.bind(result.editing), dispatch: (command) => { dispatch(command); return result.editing.dispatch(command); } } };
+  });
+  for (const visible of [true, false, false]) {
+    const source = f.session.workspace.current!; const input = { ...visibilityRequest(f, visible) };
+    const reads: string[] = []; const captured = { ...input }; dispatch.mockClear(); bridgePublish.mockClear(); clearPositionEffects(f);
+    for (const key of Object.keys(input) as (keyof VisibilityRequest)[]) Object.defineProperty(captured, key, { get() { reads.push(key); return input[key]; } });
+    f.deps.commandId.mockImplementation(() => {
+      expect(reads).toEqual(["documentId", "revisionId", "elementId", "visible"]);
+      expect(bridge.mock.calls.at(-1)![0].workspace.current).toBe(source);
+      Object.assign(input, { documentId: "foreign", revisionId: "retargeted", elementId: "group", visible: !visible });
+      return "visibility-command";
+    });
+    await expect(visibilitySession(f).setShapeVisibility(captured)).resolves.toBeUndefined();
+    const expected = structuredClone(source.revision.document); Object.assign(expected.elements[0]!, { visible });
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith({ commandSchemaVersion: 1, commandId: "visibility-command",
+      documentId: "document-1", expectedRevision: 0, actorCapability: "human-ui",
+      payload: { type: "set-shape-visibility", elementId: "shape-1", visible } });
+    expect(bridgePublish.mock.calls[0]![0]).toMatchObject({ sequence: source.revision.sequence + 1,
+      expectedSource: { documentId: "document-1", revisionId: source.revision.revisionId } });
+    await expectDurable(f, `revision-${source.revision.sequence + 1}`, source.revision.sequence + 1, expected);
+    expect(f.session.workspace.current!.revision.document).toStrictEqual(expected);
+    expect(await f.persistence.readRevision("document-1", source.revision.revisionId)).toEqual(source.revision);
+    expect(reads).toEqual(["documentId", "revisionId", "elementId", "visible"]); expect(f.deps.elementIdSource).not.toHaveBeenCalled();
+    for (const spy of [f.deps.commandId, f.deps.revisionId, f.deps.createdAt]) expect(spy).toHaveBeenCalledTimes(1);
+  }
+  expect(bridge).toHaveBeenCalledTimes(3);
+});
+
+it.each([
+  ...[0, 1, "true", null, undefined, NaN, {}, [], new Boolean(false)].map((visible) => ["visible", { visible }, "INPUT_INVALID"] as const),
+  ["empty document", { documentId: "" }, "INPUT_INVALID"], ["empty revision", { revisionId: "" }, "INPUT_INVALID"],
+  ["empty target", { elementId: "" }, "INPUT_INVALID"], ["missing target", { elementId: "unknown" }, "INPUT_INVALID"],
+  ["nonstring target", { elementId: 3 }, "INPUT_INVALID"], ["wrong document", { documentId: "foreign" }, "SOURCE_MISMATCH"],
+  ["stale revision", { revisionId: "old" }, "SOURCE_MISMATCH"],
+] as const)("visibility rejects %s before every effect (%j)", async (_name, invalid, code) => {
+  const f = fixture(); await f.importJson(); const current = f.session.workspace.current!;
+  const pointers = await f.persistence.readPointers("document-1"); clearPositionEffects(f);
+  for (const spy of [f.deps.commandId, f.deps.revisionId, f.deps.createdAt]) spy.mockImplementation(() => { throw new Error("metadata must not run"); });
+  expect(typeof visibilitySession(f).setShapeVisibility).toBe("function");
+  await expect(visibilitySession(f).setShapeVisibility({ ...visibilityRequest(f), ...invalid } as VisibilityRequest)).rejects.toThrow(`EDITOR_SHAPE_VISIBILITY_${code}`);
+  expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+  expect(await f.persistence.readPointers("document-1")).toEqual(pointers); expect(await f.persistence.readRevision("document-1", current.revision.revisionId)).toEqual(current.revision);
+});
+
+it.each([null, undefined, {}, [], "request", 3, true, () => undefined])(
+  "visibility rejects malformed request %j with bounded input failure", async (input) => {
+    const f = fixture(); await f.importJson(); const current = f.session.workspace.current!;
+    const pointers = await f.persistence.readPointers("document-1"); clearPositionEffects(f);
+    expect(typeof visibilitySession(f).setShapeVisibility).toBe("function");
+    await expect(visibilitySession(f).setShapeVisibility(input as VisibilityRequest)).rejects.toThrow("EDITOR_SHAPE_VISIBILITY_INPUT_INVALID");
+    expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+    expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+  },
+);
+
+it.each(["documentId", "revisionId", "elementId", "visible"] as const)("visibility bounds a throwing %s getter before metadata", async (field) => {
+  const f = fixture(); await f.importJson(); const current = f.session.workspace.current!;
+  const input = visibilityRequest(f); Object.defineProperty(input, field, { get() { throw new Error("caller getter"); } });
+  clearPositionEffects(f); expect(typeof visibilitySession(f).setShapeVisibility).toBe("function");
+  await expect(visibilitySession(f).setShapeVisibility(input)).rejects.toThrow("EDITOR_SHAPE_VISIBILITY_INPUT_INVALID");
+  expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+});
+
+it.each(["missing", "foreign", "overflow", "released"])("visibility rejects %s current without adopting or modifying it", async (kind) => {
+  const f = fixture();
+  if (kind !== "missing") await f.session.workspace.publish({ documentId: kind === "foreign" ? "foreign" : "document-1",
+    editableJson: JSON.stringify(documentAt(0.4)), revisionId: () => "source",
+    sequence: kind === "overflow" ? Number.MAX_SAFE_INTEGER : 1, createdAt: () => 1234 });
+  if (kind === "released") f.session.workspace.current!.release();
+  const current = f.session.workspace.current; clearPositionEffects(f);
+  expect(typeof visibilitySession(f).setShapeVisibility).toBe("function");
+  await expect(visibilitySession(f).setShapeVisibility({ documentId: "document-1", revisionId: "source", elementId: "shape-1", visible: true }))
+    .rejects.toThrow("EDITOR_SHAPE_VISIBILITY_SOURCE_UNAVAILABLE");
+  expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+});
+
+it.each(["group", "line", "text", "particle", "image"] as const)("visibility rejects genuine %s targets before effects", async (type) => {
+  const f = fixture(); await f.importJson();
+  if (type === "image") await f.session.importWorkflow({ kind: "image-import", file: new File([bytes], "image.png", { type: "image/png" }) });
+  else {
+    const document = documentAt(0.4);
+    const element = type === "group" ? { id: "nonshape", type, childrenIds: [] }
+      : type === "line" ? { id: "nonshape", type, x1: 0, y1: 0, x2: 1, y2: 1, opacity: 1 }
+      : type === "text" ? { id: "nonshape", type, x: 0, y: 0, text: "authored", fontSize: 12, opacity: 1 }
+      : { id: "nonshape", type, count: 1, x: 0, y: 0, velocityX: 1, velocityY: 1, spread: 1, size: 1, opacity: 1, lifetimeSteps: 1 };
+    document.elements.push(element); document.rootIds.push("nonshape"); await f.importJson(document);
+  }
+  const current = f.session.workspace.current!; clearPositionEffects(f);
+  expect(typeof visibilitySession(f).setShapeVisibility).toBe("function");
+  await expect(visibilitySession(f).setShapeVisibility({ ...visibilityRequest(f), elementId: type === "image" ? "image-1" : "nonshape" }))
+    .rejects.toThrow("EDITOR_SHAPE_VISIBILITY_INPUT_INVALID");
+  expectNoPositionEffects(f); expect(f.session.workspace.current).toBe(current);
+});
+
+it.each(["preparation", "write", "invalid-publication", "competitor-before", "competitor-during"])(
+  "visibility preserves the prior or native CAS winner on %s without retry", async (fault) => {
+    const f = fixture(); await f.importJson(); const source = f.session.workspace.current!;
+    const pointers = await f.persistence.readPointers("document-1");
+    const winner = createCompleteRevision({ documentId: "document-1", revisionId: "external-winner", sequence: 2, document: documentAt(0.8) });
+    const winnerPointers = { saved: null, draft: { kind: "draft" as const, documentId: "document-1", revisionId: winner.revisionId, sequence: 2 } };
+    if (fault === "competitor-before") await f.persistence.writeCompleteRevision(winner, winnerPointers);
+    if (fault === "preparation") f.readPointers.mockRejectedValueOnce(new Error("prepare failed"));
+    if (fault === "write") f.writeRevision.mockRejectedValueOnce(new Error("write failed"));
+    if (fault === "invalid-publication") f.deps.createdAt.mockReturnValue(-1);
+    if (fault === "competitor-during") f.readPointers.mockImplementationOnce(async (...args) => {
+      const held = await f.realReadPointers(...args); await f.persistence.writeCompleteRevision(winner, winnerPointers); return held; });
+    f.writeRevision.mockClear(); expect(typeof visibilitySession(f).setShapeVisibility).toBe("function");
+    await expect(visibilitySession(f).setShapeVisibility(visibilityRequest(f))).rejects.toThrow(/EDITOR_SHAPE_VISIBILITY_/);
+    expect(f.session.workspace.current).toBe(source);
+    expect(await f.persistence.readRevision("document-1", "revision-2")).toBeNull(); expect(await f.persistence.readRevision("document-1", source.revision.revisionId)).toEqual(source.revision);
+    if (fault.startsWith("competitor")) expect(await f.persistence.readPointers("document-1")).toEqual(winnerPointers); else expect(await f.persistence.readPointers("document-1")).toEqual(pointers);
+  });
