@@ -26,6 +26,24 @@ un contexto nuevo, aislado y propio; no manipules un perfil de trabajo compartid
 | Loading/pending | Startup o trabajo aún no terminado | Esperar; no forzar submits |
 | Error de startup | Storage, contenido, assets, contexto o render no utilizables | Diagnosticar; no seed/reset/fallback |
 
+### Layout del editor
+
+En escritorio, el canvas ocupa toda la pantalla por detrás del panel flotante, que reúne
+todos los controles. Escala en proporción 16:10, sin deformar ni recortar la escena; el
+panel tapa su parte derecha mientras editas:
+
+- **Cabecera:** marca y título *JSON scene editor*.
+- **Pestañas** *Scene* · *Create* · *Inspect*: son enlaces que desplazan el panel hasta
+  cada sección. No ocultan contenido, así que todas las acciones siguen disponibles.
+- **Pie:** el estado principal (`#status`).
+
+**Hide panel**, arriba a la izquierda, oculta el panel para ver el canvas completo, y
+**Show panel** lo recupera. Es solo un cambio de vista por ancla (`#canvas-focus`): no
+cancela trabajo, no publica nada y no altera la selección.
+
+Por debajo de 900 px el layout se apila (acciones de vista, canvas y panel) sin scroll
+horizontal. El escalado del canvas es solo visual: el canvas lógico sigue siendo 256×160.
+
 Los frames usan el `playbackRange.startUs` del documento en canvas 256×160.
 La muestra no tiene autoridad de edición. Un error inicial mantiene controles
 bloqueados; no convierte saved/sample en draft ni habilita creación de reemplazo.
