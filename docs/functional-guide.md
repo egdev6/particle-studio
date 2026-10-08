@@ -28,15 +28,15 @@ un contexto nuevo, aislado y propio; no manipules un perfil de trabajo compartid
 
 ### Layout del editor
 
-En escritorio, el canvas ocupa el escenario a pantalla completa como mesa de trabajo
-(artboard) y todos los controles viven en un panel flotante a la derecha:
+En escritorio, el canvas ocupa todo el espacio libre a la izquierda del panel flotante,
+que reúne todos los controles. Escala en proporción 16:10, sin deformar ni recortar la escena:
 
 - **Cabecera:** marca y título *JSON scene editor*.
 - **Pestañas** *Scene* · *Create* · *Inspect*: son enlaces que desplazan el panel hasta
   cada sección. No ocultan contenido, así que todas las acciones siguen disponibles.
 - **Pie:** el estado principal (`#status`).
 
-**Hide panel**, arriba a la izquierda, oculta el panel para ver el canvas más grande, y
+**Hide panel**, arriba a la izquierda, oculta el panel y el canvas pasa a ocupar toda la pantalla; y
 **Show panel** lo recupera. Es solo un cambio de vista por ancla (`#canvas-focus`): no
 cancela trabajo, no publica nada y no altera la selección.
 

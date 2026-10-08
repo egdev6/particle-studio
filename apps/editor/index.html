@@ -120,24 +120,26 @@
       }
 
       /* ---------- Stage (canvas artboard) ---------- */
+      /*
+       * The stage fills every pixel left of the panel (the whole viewport in canvas focus).
+       * The canvas scales to the largest 16:10 box that fits, so the scene is never
+       * stretched or cropped; the logical canvas stays 256×160.
+       */
       .stage {
         position: fixed;
         inset: 0 calc(var(--panel-width) + var(--gutter) * 2) 0 0;
         display: flex;
-        flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 14px;
-        padding: 72px 32px 32px;
+        padding: var(--gutter);
+        container-type: size;
         transition: inset 300ms ease;
       }
 
       .artboard {
-        width: min(100%, 768px);
-        padding: 10px;
-        border-radius: var(--radius-panel);
+        width: min(100cqw, 100cqh * 1.6);
+        border-radius: var(--radius-card);
         border: 1px solid var(--line);
-        background: rgba(0, 0, 0, 0.45);
         box-shadow:
           0 0 0 1px rgba(239, 68, 68, 0.08),
           0 0 60px rgba(220, 38, 38, 0.18),
@@ -149,7 +151,8 @@
         width: 100%;
         height: auto;
         aspect-ratio: 256 / 160;
-        border-radius: var(--radius-control);
+        image-rendering: pixelated;
+        border-radius: calc(var(--radius-card) - 1px);
         background-color: #2e252c;
         background-image:
           linear-gradient(45deg, #3a3038 25%, transparent 25%),
@@ -161,7 +164,16 @@
       }
 
       .stage-meta {
+        position: absolute;
+        right: calc(var(--gutter) * 2);
+        bottom: calc(var(--gutter) * 2);
         margin: 0;
+        padding: 6px 10px;
+        border-radius: var(--radius-control);
+        border: 1px solid var(--line);
+        background: rgba(0, 0, 0, 0.7);
+        -webkit-backdrop-filter: blur(24px);
+        backdrop-filter: blur(24px);
         display: flex;
         gap: 10px;
         align-items: center;
@@ -593,9 +605,6 @@
         inset: 0;
       }
 
-      body:has(#canvas-focus:target) .artboard {
-        width: min(100%, 1120px);
-      }
 
       body:has(#canvas-focus:target) .pill-hide {
         display: none;
@@ -630,6 +639,17 @@
           position: static;
           order: 1;
           padding: 0;
+          container-type: normal;
+        }
+
+        .stage-meta {
+          position: static;
+          align-self: flex-start;
+        }
+
+        .stage {
+          flex-direction: column;
+          gap: 10px;
         }
 
         .artboard {
