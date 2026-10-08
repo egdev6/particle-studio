@@ -121,29 +121,22 @@
 
       /* ---------- Stage (canvas artboard) ---------- */
       /*
-       * The stage fills every pixel left of the panel (the whole viewport in canvas focus).
-       * The canvas scales to the largest 16:10 box that fits, so the scene is never
-       * stretched or cropped; the logical canvas stays 256×160.
+       * Full-bleed stage behind the floating panel, as in the reference. The canvas scales to
+       * the largest 16:10 box that fits the viewport, so the scene is never stretched or
+       * cropped (the panel overlays its right side; Hide panel reveals it). The logical
+       * canvas stays 256×160. The panel's higher z-index keeps every control clickable.
        */
       .stage {
         position: fixed;
-        inset: 0 calc(var(--panel-width) + var(--gutter) * 2) 0 0;
+        inset: 0;
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: var(--gutter);
         container-type: size;
-        transition: inset 300ms ease;
       }
 
       .artboard {
         width: min(100cqw, 100cqh * 1.6);
-        border-radius: var(--radius-card);
-        border: 1px solid var(--line);
-        box-shadow:
-          0 0 0 1px rgba(239, 68, 68, 0.08),
-          0 0 60px rgba(220, 38, 38, 0.18),
-          0 8px 32px rgba(0, 0, 0, 0.85);
       }
 
       #scene {
@@ -152,7 +145,6 @@
         height: auto;
         aspect-ratio: 256 / 160;
         image-rendering: pixelated;
-        border-radius: calc(var(--radius-card) - 1px);
         background-color: #2e252c;
         background-image:
           linear-gradient(45deg, #3a3038 25%, transparent 25%),
@@ -165,8 +157,8 @@
 
       .stage-meta {
         position: absolute;
-        right: calc(var(--gutter) * 2);
-        bottom: calc(var(--gutter) * 2);
+        left: var(--gutter);
+        bottom: var(--gutter);
         margin: 0;
         padding: 6px 10px;
         border-radius: var(--radius-control);
@@ -601,10 +593,6 @@
         visibility: hidden;
       }
 
-      body:has(#canvas-focus:target) .stage {
-        inset: 0;
-      }
-
 
       body:has(#canvas-focus:target) .pill-hide {
         display: none;
@@ -654,6 +642,9 @@
 
         .artboard {
           width: 100%;
+          overflow: hidden;
+          border-radius: var(--radius-card);
+          border: 1px solid var(--line);
         }
 
         .panel {
