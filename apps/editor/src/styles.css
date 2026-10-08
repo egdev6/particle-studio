@@ -1,0 +1,61 @@
+:root {
+  color: #172033;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  background: #f6f8fc;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button {
+  font: inherit;
+}
+
+.editor-shell {
+  display: grid;
+  gap: 2rem;
+  max-width: 48rem;
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 4rem 1.5rem;
+}
+
+.editor-shell__header,
+.editor-shell section {
+  padding: 1.5rem;
+  border: 1px solid #d7dfef;
+  border-radius: 0.75rem;
+  background: #ffffff;
+}
+
+.editor-shell__eyebrow {
+  margin: 0;
+  color: #475569;
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h1,
+h2 {
+  margin-top: 0;
+}
+
+button {
+  padding: 0.65rem 1rem;
+  border: 0;
+  border-radius: 0.4rem;
+  color: #ffffff;
+  background: #1d4ed8;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #1e40af;
+}

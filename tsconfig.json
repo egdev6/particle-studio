@@ -1,0 +1,16 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./apps/editor" },
+    { "path": "./apps/headless-mcp" },
+    { "path": "./packages/scene-document" },
+    { "path": "./packages/commands" },
+    { "path": "./packages/webmcp-adapter" },
+    { "path": "./packages/persistence" },
+    { "path": "./packages/persistence-indexeddb" },
+    { "path": "./packages/persistence-fs" },
+    { "path": "./packages/runtime" },
+    { "path": "./packages/renderer-canvas2d" },
+    { "path": "./packages/export" }
+  ]
+}
